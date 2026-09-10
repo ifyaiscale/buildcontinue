@@ -2,6 +2,14 @@
 
 A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, TypeScript, and SQLite. Designed for organizing your Shopify stores and Whop companies in one place, with a branded checkout preview for each brand.
 
+> **Current status: working management app and demo checkout, not live payment processing.** Publishing this code does not deploy the app, transfer private workspace data, or connect provider accounts.
+
+## System overview
+
+Read the [system overview and intended live workflow](docs/SYSTEM_OVERVIEW.md) for the component breakdown, owner/customer journeys, Shopify and Whop responsibilities, checkout-subdomain plan, data boundaries, and launch gates.
+
+The intended arrangement is Shopify storefronts → brand-specific Limitless checkout pages → supported Whop payment collection → reliable Shopify order synchronization. The custom checkout design exists; live payment collection, Shopify cart handoff/order writes, shipping/tax integration, personalized-product handling, webhooks, and custom-domain routing are still pending. Shopify should remain the source of truth for existing products, markets, shipping, and fulfillment—not require the owner to recreate those settings in Limitless.
+
 ## What works today
 
 - Persistent brand creation, branding settings, dashboard order aggregates, and activity.
@@ -46,7 +54,7 @@ Same-day **demo setup and account verification** are possible if you have the re
 Use **Node.js 24** (the backend uses `node:sqlite`):
 
 ```sh
-npm install
+npm ci
 cp .env.example .env.local
 npm run dev
 ```
@@ -126,13 +134,14 @@ All responses are JSON; errors have `{ "error": "…" }`. Management routes requ
 | Route | Purpose |
 | --- | --- |
 | `GET /api/state` | Brands, orders, activity and environment flags |
-| `POST /api/brands` | `{name, category, domain, accent}` → new empty demo draft |
-| `PATCH /api/brands/:id` | Name/category/domain/accent, checkoutTitle, announcement, supportEmail, shippingPrice, freeShippingThreshold only |
+| `POST /api/brands` | `{name, category, domain?, accent?, accountDetails?}` → new empty demo draft |
+| `PATCH /api/brands/:id` | Validated name/category/domain/accent, checkoutTitle, announcement, supportEmail, shippingPrice, freeShippingThreshold, checkoutExperience, and accountDetails; no connection-status or credential assignment |
 | `POST /api/brands/:id/connections` | `{provider:"shopify",domain,accessToken}` or `{provider:"whop",companyId,apiKey,webhookSecret?}`; authenticated secure deployments only |
 | `POST /api/brands/:id/products/sync` | Read and replace Shopify catalog; authenticated secure deployments only |
+| `POST /api/brands/:id/products` | `{title, description?, price}` → add a manual test product to a demo brand |
 | `POST /api/brands/:id/publish` | `{mode:"demo"}`; requires an available product. `live` explicitly blocked |
 | `GET /api/checkout/:slug` | Sanitized brand, no provider account identifiers; drafts need admin/demo access |
-| `POST /api/checkout/:slug` | `{mode:"demo",items:[{productId,quantity}],customer:{email,firstName,lastName,address,city,postalCode,country}}` → `{orderId,mode:"demo",total}` |
+| `POST /api/checkout/:slug` | `{mode:"demo",items:[{productId,quantity}],customer:{email,firstName,lastName,address,city,postalCode,country},options?:{discountCode?,tipPercent?,priority?}}` → `{orderId,mode:"demo",total,breakdown}` |
 | `GET /api/auth/status` | `{authenticated,configured,demo}` |
 | `POST /api/auth/login` | `{password}`; rate-limited |
 | `POST /api/auth/logout` | `{}`; clears cookie |
