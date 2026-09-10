@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
-export class HttpError extends Error {
-  constructor(public status: number, message: string) { super(message); }
-}
+import { HttpError } from "./errors";
+import { requestSite, requireSitePath } from "./hosts";
+export { HttpError } from "./errors";
 
 const COOKIE = "limitless_session";
 const SESSION_SECONDS = 60 * 60 * 8;
@@ -61,15 +61,9 @@ export function requireCredentials(request: Request) {
   if (!encryptionConfigured()) throw new HttpError(503, "Set a 32-byte CREDENTIAL_ENCRYPTION_KEY before connecting accounts.");
 }
 export function checkOrigin(request: Request) {
-  const requestUrl = new URL(request.url);
-  // Next dev normalizes request.url to its bind address; Host preserves the browser-facing origin.
-  const localOrigin = request.headers.get("host") ? `${requestUrl.protocol}//${request.headers.get("host")}` : requestUrl.origin;
-  let expected = process.env.APP_URL || (process.env.NODE_ENV !== "production" ? localOrigin : "");
-  try {
-    const url = new URL(expected);
-    if (url.origin !== expected || !["http:", "https:"].includes(url.protocol) || (process.env.NODE_ENV === "production" && url.protocol !== "https:")) expected = "";
-  } catch { expected = ""; }
-  if (!expected) throw new HttpError(503, "Configure APP_URL with the application origin before making changes.");
+  const site = requestSite(request);
+  requireSitePath(site, new URL(request.url).pathname);
+  const expected = site.origin;
   const origin = request.headers.get("origin");
   if (!origin || origin !== expected || request.headers.get("sec-fetch-site") === "cross-site") throw new HttpError(403, "Request origin must match the application origin.");
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") throw new HttpError(415, "Use application/json.");

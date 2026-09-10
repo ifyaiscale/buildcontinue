@@ -162,8 +162,8 @@ test("production mutation origin configuration requires HTTPS and an exact origi
     });
   }
   environment({ NODE_ENV: "production", APP_URL: "https://example.com" }, () => {
-    checkOrigin(request("/api/brands", { method: "POST", headers: { origin: "https://example.com", "content-type": "application/json; charset=utf-8" } }));
-    assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { origin: "https://example.com", "content-type": "application/json-fake" } })), /application\/json/);
+    checkOrigin(request("/api/brands", { method: "POST", headers: { host: "example.com", origin: "https://example.com", "content-type": "application/json; charset=utf-8" } }));
+    assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { host: "example.com", origin: "https://example.com", "content-type": "application/json-fake" } })), /application\/json/);
   });
 });
 
@@ -219,17 +219,18 @@ test("development uses the actual Host while production still requires its confi
   });
   environment({ NODE_ENV: "production", APP_URL: "https://checkout.example" }, () => {
     const forged = new Request("http://0.0.0.0:3000/api/brands", { method: "POST", headers: { host: "evil.example", origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
-    assert.throws(() => checkOrigin(forged), /origin must match/);
+    assert.throws(() => checkOrigin(forged), /Site not configured/);
   });
 });
 
 test("production APIs protect admin state and public drafts, sanitize account identities", async () => {
-  const old = { NODE_ENV: process.env.NODE_ENV, ADMIN_PASSWORD: process.env.ADMIN_PASSWORD, ADMIN_PASSWORD_HASH: process.env.ADMIN_PASSWORD_HASH, SESSION_SECRET: process.env.SESSION_SECRET };
+  const old = { NODE_ENV: process.env.NODE_ENV, APP_URL: process.env.APP_URL, ADMIN_PASSWORD: process.env.ADMIN_PASSWORD, ADMIN_PASSWORD_HASH: process.env.ADMIN_PASSWORD_HASH, SESSION_SECRET: process.env.SESSION_SECRET };
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
   const previousStore = globals.limitlessStore; const db = new Store(":memory:"); globals.limitlessStore = db;
   try {
-    Object.assign(process.env, { NODE_ENV: "production", ADMIN_PASSWORD: "strong-password-test-123!", SESSION_SECRET: "s".repeat(48) }); delete process.env.ADMIN_PASSWORD_HASH;
+    Object.assign(process.env, { NODE_ENV: "production", APP_URL: "https://dashboard.example", ADMIN_PASSWORD: "strong-password-test-123!", SESSION_SECRET: "s".repeat(48) }); delete process.env.ADMIN_PASSWORD_HASH;
     const handler = route(handleApi);
+    const request = (path = "/api/state", options: RequestInit = {}) => new Request(`https://dashboard.example${path}`, options);
     assert.equal((await handler(request())).status, 401);
     assert.equal((await handler(request("/api/checkout/aure-studio"))).status, 404);
     db.publish("brand_1", "demo");

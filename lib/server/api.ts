@@ -5,6 +5,7 @@ import { store } from "./store";
 import { connectionInput, loginInput, publishInput } from "./validation";
 import { syncShopify, verifyShopify, verifyWhop, type ShopifyCredentials } from "./providers";
 import { accountDetails } from "../accounts";
+import { requestSite, requireSitePath } from "./hosts";
 
 function publicBrand(brand: Brand): Brand {
   const { accountDetails: _accountDetails, ...publicFields } = brand;
@@ -14,6 +15,8 @@ function publicBrand(brand: Brand): Brand {
 export async function handleApi(request: Request): Promise<Response> {
   const path = new URL(request.url).pathname.replace(/\/$/, "");
   const method = request.method;
+  const site = requestSite(request);
+  requireSitePath(site, path);
   if (path === "/api/auth/status" && method === "GET") return json({ authenticated: authenticated(request), configured: authConfigured(), demo: demoMode() });
   if (path === "/api/auth/login" && method === "POST") {
     // A global bucket cannot be bypassed by spoofing proxy/IP headers.
@@ -39,7 +42,7 @@ export async function handleApi(request: Request): Promise<Response> {
   if (checkout && (method === "GET" || method === "POST")) {
     if (!authConfigured() && !demoMode()) throw new HttpError(503, "This deployment is not configured for checkout.");
     const slug = checkout[1]; const db = store(); const brand = db.brand(slug, true);
-    const allowDraft = authenticated(request) || demoMode();
+    const allowDraft = site.kind === "admin" && (authenticated(request) || demoMode());
     if (brand.status !== "live" && !allowDraft) throw new HttpError(404, "Checkout is not published.");
     if (method === "GET") return json(publicBrand(brand));
     rateLimit("checkout", 120, 60000);

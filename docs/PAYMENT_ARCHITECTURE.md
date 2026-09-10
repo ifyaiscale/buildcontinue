@@ -1,0 +1,38 @@
+# Payment integration: evidence and remaining decisions
+
+Reviewed 2026-09-10. This is a private, merchant-owned tool for multiple Shopify brands, not an App Store product. No provider credentials, real orders, or payments were used for this research. **Hosting is not the only remaining launch gate.**
+
+## What the official documentation establishes
+
+- [Whop embedded checkout](https://docs.whop.com/payments/checkout-embed) provides a hosted iframe that can live inside a custom page. Redirects, return URLs, and externally authenticated payment methods still need handling. Browser success callbacks or URL parameters must not be treated as server-side proof of payment.
+- [Whop DTC e-commerce](https://docs.whop.com/supported-business-models/dtc-ecommerce) explicitly describes physical-product sales and webhook-triggered fulfillment. This does not establish Shopify shipping/Markets parity, approval of a specific merchant's products, or automatic order synchronization.
+- [Whop tax guidance](https://docs.whop.com/payments-and-billing/fees/taxes) distinguishes external/embedded DTC sales: do not assume Whop calculates or remits these taxes on the merchant's behalf.
+- Shopify's [2026-07 Cart](https://shopify.dev/docs/api/storefront/2026-07/objects/Cart) leads buyers to `checkoutUrl` for Shopify Checkout. [CartCost](https://shopify.dev/docs/api/storefront/2026-07/objects/CartCost) is an estimate subject to change at checkout. A missing tax amount is not evidence that zero tax is owed.
+- [draftOrderCalculate](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/draftOrderCalculate) can calculate a proposed draft without creating it. [CalculatedDraftOrder](https://shopify.dev/docs/api/admin-graphql/2026-07/objects/CalculatedDraftOrder) includes shipping rates and monetary breakdowns, with warnings that must be handled. Currency alone does not establish Markets-price parity; Shopify documents that [marketRegionCountryCode does not affect drafts on shops using Markets](https://shopify.dev/changelog/new-warning-draftordermarketregioncountrycodenotsupportedwarning-added-to-draftorder).
+- [draftOrderComplete](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/draftOrderComplete) converts a draft to an order, and Shopify documents [marking drafts paid after payment elsewhere](https://help.shopify.com/en/manual/fulfillment/managing-orders/create-orders/get-paid). These are documented capabilities, not blanket authorization for an automated replacement of Shopify Checkout.
+- [orderCreate](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/orderCreate) supports external-system imports with an offline token and `write_orders`. It does not automatically apply automatic discounts and supports only one discount code. It is not a drop-in Shopify Checkout calculator.
+
+## Permission is distinct from API capability
+
+Shopify's [App Store requirements, §1.1.2](https://shopify.dev/docs/apps/launch/shopify-app-store/app-store-requirements) explicitly prohibit bypassing checkout for App Store eligibility. That page alone does **not** establish that this private merchant-owned integration is prohibited. Equally, private ownership does not grant access to Shopify's approved payments platform. [Offsite payments extensions](https://shopify.dev/docs/apps/build/payments/offsite/use-the-cli) require Payments Partner approval.
+
+Before finalizing the external-payment design, confirm with Shopify whether the specific automated Whop-payment/order-sync workflow is supported for these stores, how transactions must be classified, and which fees apply. Confirm with Whop that the actual products and accounts support the required embedded DTC flow, currencies, fulfillment, refunds, disputes, and tax responsibilities. No such confirmation has been obtained here.
+
+## Candidate paths — not implemented or selected
+
+1. **Lowest integration uncertainty:** preserve Shopify Checkout via `checkoutUrl`. Use Whop there only if a supported, approved integration is confirmed. This does not promise the same fully custom checkout layout.
+2. **Conditional external flow:** calculate and validate a Shopify draft → retain an expiring server-owned quote → create a Whop payment checkout → verify a signed payment event and authoritative amount/currency/account → complete that draft once. This needs provider confirmation and account-specific tests before adoption.
+
+A generic public API that completes a Shopify Storefront Cart using an arbitrary Whop receipt has not been established. Do not rely on Shopify internal checkout endpoints or obsolete completion APIs.
+
+## Required pre-launch implementation and acceptance
+
+- Storefront cart handoff; server-side validation of variants, quantities, availability, country, shipping options, discounts, and exact payable totals.
+- Expiring immutable quotes and correct handling of changed rates, tax-inclusive/exempt orders, Markets pricing, and inventory races.
+- Whop payment sessions and the actual embedded component, not demo wallet/card marks.
+- Signed raw-body webhooks, timestamp/replay checks, durable event/payment deduplication, and server-side payment verification. Webhook signature authentication is separate from browser-origin checks.
+- Exactly-once business effects using durable state, retries, and reconciliation; visible paid-but-unsynced exceptions; documented recovery/refund paths.
+- Personalization transfer: [cart line attributes](https://shopify.dev/docs/api/storefront/2026-07/input-objects/CartLineInput), draft `customAttributes`, or imported [order-line properties](https://shopify.dev/docs/api/admin-graphql/2026-07/input-objects/OrderCreateLineItemInput). Private artwork needs durable, access-controlled storage, not an unrestricted URL or a catalog image.
+- Per-brand provider test transactions and shipping/tax/order-parity checks. Follow with an explicitly authorized real purchase/refund acceptance test.
+
+Production hosting and DNS can remain the deployment stage after local implementation. Final HTTPS callbacks, domain/wallet verification, real-account connectivity, backup restoration, and end-to-end acceptance still need a reachable deployment or suitable secure test endpoint. A passing local build cannot verify those gates.

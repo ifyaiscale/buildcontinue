@@ -92,7 +92,20 @@ node -e 'console.log(require("node:crypto").randomBytes(48).toString("hex"))' # 
 node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))' # CREDENTIAL_ENCRYPTION_KEY
 ```
 
-Production management fails closed if authentication is missing. Production mutations require an HTTPS `APP_URL` with no path or trailing slash; the reverse proxy must preserve the public request origin. Unauthenticated visitors can only see published demo checkouts, never draft checkouts or dashboard/customer data. Credentials are never returned in API JSON. Keep the encryption key backed up separately: replacing it makes existing saved credentials unreadable; reconnect accounts after deliberate rotation. Rotate `SESSION_SECRET` to invalidate all existing login sessions. Logout clears the current browser cookie; individual-session server-side revocation is not implemented.
+Production management fails closed if authentication is missing. `APP_URL` is the exact HTTPS **admin** origin (no path or trailing slash). The reverse proxy must preserve the public `Host` header; arbitrary `X-Forwarded-Host` headers are not trusted. Unregistered production hosts are rejected, and mutations require an origin matching the specific requested host. Unauthenticated visitors can only see published demo checkouts, never draft checkouts or dashboard/customer data. Credentials are never returned in API JSON. Keep the encryption key backed up separately: replacing it makes existing saved credentials unreadable; reconnect accounts after deliberate rotation. Rotate `SESSION_SECRET` to invalidate all existing login sessions. Logout clears the current browser cookie; individual-session server-side revocation is not implemented.
+
+### Brand checkout hosts
+
+Register exact checkout origins and existing brand slugs in a private environment variable:
+
+```sh
+APP_URL=https://admin.example
+CHECKOUT_ORIGINS='{"https://checkout.brand.example":"brand-slug"}'
+```
+
+Each mapped host serves its brand's checkout at `/` (or `/checkout/:slug`). Only that brand's `/api/checkout/:slug` endpoint is available on that host: other brands, login, and management APIs return 404. A valid admin cookie does not expose drafts there. Admin cookies remain host-only, and each checkout mutation must come from its own origin, not another registered checkout or the dashboard. Owner draft previews still work at `/checkout/:slug` on the admin origin. Invalid mappings fail closed; checkout hosts must differ from the admin host. Leave `CHECKOUT_ORIGINS={}` for the existing path-based development workflow.
+
+This is application routing, **not automatic DNS, domain ownership verification, or certificate provisioning**. Before adding a real domain, verify ownership and configure its DNS/TLS with the eventual hosting provider. Do not point customer traffic here until the payment launch gates are complete. With SQLite, run one server instance and disable shared/proxy caching for checkout pages and APIs. The app's domain mappings are environment configuration; saved storefront/account aliases do not authorize hosts.
 
 SQLite runs in WAL mode. Use a consistent SQLite backup, not a copy of just the main file while writes are running. The database includes customer names/emails entered during checkout and needs access controls, retention/deletion procedures, and encrypted backups. Shipping addresses are validated but not retained because this version does not fulfill orders. Delete the database **only for an intentional demo reset**, with the server stopped; it will reseed on next start. Do not use an ephemeral/serverless filesystem or multiple replicas with independent databases. The in-memory rate limiter is process-local and resets on restart: add trusted edge rate limiting before exposing a real deployment.
 

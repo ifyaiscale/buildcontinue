@@ -44,6 +44,7 @@ In production, management requires administrator authentication. In an unconfigu
 - `lib/server/store.ts`: SQLite persistence and transactional demo ordering.
 - `lib/server/providers.ts`: Shopify/Whop API adapters.
 - `lib/server/security.ts`, `validation.ts`, `http.ts`: authentication, encryption, origin validation, limits, and errors.
+- `lib/server/hosts.ts`, `page-site.ts`: explicit checkout-origin mappings, per-host request checks, and server-side page routing.
 - `tests/`: automated regression coverage.
 
 ## Brand onboarding: what works now
@@ -85,6 +86,8 @@ Important limitations:
 
 ## Intended live workflow — design target, not implemented
 
+See [payment architecture evidence and remaining decisions](PAYMENT_ARCHITECTURE.md) for the current official API findings. The external-payment path below is conditional, not a confirmed Shopify/Whop integration.
+
 ```text
 Shopify storefront and cart
   → supported cart handoff to checkout.brand.example
@@ -121,7 +124,9 @@ Before launch, the backend needs signature verification over the provider's requ
 
 The agreed approach is a **brand checkout subdomain**, such as `checkout.brand.example`, pointing to Limitless. Main storefronts remain on Shopify. A separate private dashboard address is proposed.
 
-Currently, routing is path-based (`/checkout/:slug`) on the development Preview. Custom-domain-to-brand routing, domain ownership verification, TLS provisioning, and a separate admin hostname are **not implemented**. The security layer currently expects one exact production `APP_URL` origin. Supporting multiple checkout hosts requires explicit registered-host/origin validation and correct admin-cookie isolation—not disabling origin checks or accepting arbitrary forwarded hosts.
+Application routing now supports explicit `CHECKOUT_ORIGINS` mappings from an exact origin to an existing brand slug. `APP_URL` remains the separate admin origin. A registered checkout host serves only its brand at `/` or `/checkout/:slug`, blocks other brands and admin APIs, and accepts mutations only from its own origin. Drafts remain private even if an admin cookie is supplied to a checkout host. Cookies are host-only, production requires HTTPS origins, unknown production hosts are rejected, and arbitrary forwarded-host headers are not trusted. The default development Preview remains path-based with no mappings configured.
+
+**DNS ownership verification, TLS provisioning, and registration of actual hosting domains are not done.** Environment mappings are an owner-managed allowlist, not a domain-verification mechanism. See the [deployment configuration](../README.md#brand-checkout-hosts). The reverse proxy must preserve `Host` and must not share cached responses between hosts.
 
 Whop may serve its payment component, but Limitless still needs a running application/backend for the custom page, secret-bearing provider requests, and payment events. The development Preview and a GitHub repository are not production hosting.
 
@@ -147,13 +152,16 @@ For the current SQLite architecture, a paid single-instance web service with a p
 | Shopify cart handoff, personalization, live totals and inventory handling | Not implemented |
 | Whop payment session creation and embedded live collection | Not implemented |
 | Signed webhooks, reliable Shopify order writes, recovery/refunds | Not implemented |
-| Production deployment, backups, monitoring, checkout-domain routing | Not configured/implemented end to end |
+| Checkout-domain routing and per-host origin/admin isolation | Implemented and regression-tested; real domains not configured |
+| Production deployment, DNS/TLS, backups, monitoring | Not configured/implemented end to end |
 | Authorized test transactions and real purchase/refund acceptance | Not performed |
 
 Do not replace `environment.liveEnabled = false` until these gates are backed by actual checks and evidence. Domain names, saved business IDs, a successful build, or a repository publication are not launch-readiness signals.
 
 ## Verification and next steps
 
-Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run build` with Node.js 24. The current automated suite covers 26 tests. Browser checks have exercised account creation/editing, invalid-ID feedback, saved provider prefills, disabled credential entry in demo, desktop/mobile checkout, an itemized demo purchase, and discount expiration without countdown resets. This evidence is for the implemented demo and account-management behavior, not real payments.
+Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run build` with Node.js 24. The current automated suite covers 32 tests, including registered-host isolation, same-host mutations, draft privacy, and rejection of unknown hosts or invalid mappings. Earlier browser checks exercised account creation/editing, invalid-ID feedback, saved provider prefills, disabled credential entry in demo, desktop/mobile checkout, an itemized demo purchase, and discount expiration without countdown resets. This evidence is for the implemented demo and account-management behavior, not real payments.
 
 Next engineering priority: confirm the supported physical-product/payment-to-Shopify architecture, including personalization and shipping/tax calculations. Then implement and test the live flow, prepare the secure deployment, migrate data privately, connect actual accounts, and configure verified checkout domains. Obtain explicit approval before any real charge/refund test.
+
+The host-routing change was also checked against a local production build with an isolated synthetic database: alternating admin/two checkout `Host` headers, no shared cached brand content, rejection of unknown/cross-brand hosts and paths, an authenticated-only admin API, exact-origin demo submission, and browser rendering of a mapped root checkout without runtime errors. This does not verify real DNS, TLS, provider callbacks, or live payment processing.

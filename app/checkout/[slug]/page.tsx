@@ -1,10 +1,9 @@
-"use client";
-
-import { useParams } from "next/navigation";
 import { CheckoutPage } from "@/components/checkout";
+import { pageSite } from "@/lib/server/page-site";
 import "../../checkout.css";
 
-export default function PublicCheckoutPage() {
-  const { slug } = useParams<{ slug: string }>();
+export default async function PublicCheckoutPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  await pageSite(`/checkout/${slug}`);
   return <CheckoutPage slug={slug} />;
 }

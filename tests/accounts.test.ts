@@ -112,7 +112,7 @@ test("public checkout redacts account metadata and production protects identifie
     process.env.SESSION_SECRET = "s".repeat(32);
     response = await route(handleApi)(new Request("https://checkout.example/api/brands/brand_1", { method: "PATCH", headers: { Origin: "https://checkout.example", "Content-Type": "application/json" }, body: JSON.stringify({ accountDetails: details }) }));
     assert.equal(response.status, 401);
-    response = await call("/api/state");
+    response = await route(handleApi)(new Request("https://checkout.example/api/state"));
     assert.equal(response.status, 401);
   });
 });
