@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-10. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+**BLOCKED — latest owner report, 21:16 UTC:** private login still returns “The sign-in security cookie is missing or invalid” after the standalone-tab change. The owner explicitly raised repeated failures and wasted credits. Stop speculative application changes and repeated login instructions. The external cookie roundtrip is not verified; local test/build success did not resolve the owner workflow. The unresolved external Preview behavior has been escalated to Hoplite's developers, not confirmed fixed.
+
 ## Outcome and fixed decisions
 
 - A **private, single-owner** dashboard for COZYINFANTS, CHEFINGS and FACEJAMAS, not a merchant subscription SaaS.
@@ -37,7 +39,7 @@ Relevant earlier commits: `19fd46f` (host isolation), `3c88e80` (pricing diagnos
 7. Embedded private login now displays **Open secure sign-in**, opening `/` in a separate tab with `noopener noreferrer`, instead of an unusable password form. The client also refuses embedded login submissions before any password request. Standalone login and embedded demo-brand actions remain available. A valid signed proof without an unambiguous cookie still fails with 403, but now explains the missing/invalid security cookie instead of the generic origin error. Temporary roundtrip requests/logging were removed; no password, token value or cookie value was recorded.
 8. Owner sign-in and the three real provider connections still need confirmation. The last inspected dashboard contained only the synthetic sample brands (Auré Studio, Form & Field, Everyday Supply) and eight sample orders. Do not claim the real brands or account records were migrated by pushing Git.
 
-Use the **Open secure sign-in** button inside the embedded Preview for sign-in and account entry. Sessions use `HttpOnly; Secure; SameSite=Strict` when the configured application origin is HTTPS. The observed embedded Preview did not return the security cookie; do not weaken cookie protections to make the iframe work or send the owner through more password/settings changes.
+The **Open secure sign-in** button exists, but is **not a confirmed resolution**. Sessions use `HttpOnly; Secure; SameSite=Strict` when the configured application origin is HTTPS. The earlier observed embedded Preview did not return the security cookie; this does not establish that iframe restrictions are the sole cause. The latest failure could involve response-cookie rewriting/rejection or inbound-cookie handling, and remains unlocalized. Do not weaken cookie protections or send the owner through more password/settings changes.
 
 ### Resuming or moving the environment
 
@@ -52,7 +54,7 @@ Use the **Open secure sign-in** button inside the embedded Preview for sign-in a
 
 ## Next actions, in order
 
-1. **Owner clicks Open secure sign-in, then signs in in the new standalone HTTPS tab.** Confirm the private dashboard actually opens. Do not count a local protocol test or the embedded demo screenshot as successful owner login. If the standalone request still fails, diagnose that real request without asking for credentials or assuming it is the same failure.
+1. **Resolve the external Preview cookie-delivery blocker before another owner login attempt.** Inspect actual external `Set-Cookie` attributes and the browser's acceptance/rejection reason, then determine whether the cookie survives the return proxy hop. Preserve secret values and platform access controls. The agent's separate browser cannot access the owner-authenticated external Preview; platform-side investigation was requested. Do not substitute another local test or another workaround for this missing evidence. No application code was changed in the latest escalation checkpoint.
 2. **Create/select each real brand.** Avoid duplicates. Keep account mapping separate for COZYINFANTS, CHEFINGS and FACEJAMAS. Do not delete sample records or overwrite an earlier private database without explicit confirmation.
 3. **Connect Shopify for each brand.** In Connections, use its permanent `.myshopify.com` domain and current supported app/token flow. Verify `read_products`/`read_inventory`, import products, and grant `write_draft_orders` for pricing diagnostics. Check current provider documentation before guiding app creation/token expiry; OAuth/refresh is not implemented.
 4. **Connect Whop for each brand.** Enter that brand's company ID and API key only in the protected form. Verification is company read access, not proof of payment creation or webhook delivery. Do not invent a webhook URL before implementing the receiver.
