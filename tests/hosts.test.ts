@@ -35,6 +35,32 @@ test("registered checkout hosts map to one brand and admin remains a separate ho
   });
 });
 
+test("HTTPS development preview login uses the configured public origin behind an HTTP proxy", async () => {
+  await configured(async () => {
+    const preview = "https://workspace.preview.example";
+    Object.assign(process.env, { NODE_ENV: "development", APP_URL: preview });
+    const handler = route(handleApi);
+    const login = (origin: string, extra: Record<string, string> = {}) => new Request("http://127.0.0.1:23000/api/auth/login", {
+      method: "POST", headers: { host: "127.0.0.1:23000", origin, "content-type": "application/json", ...extra },
+      body: JSON.stringify({ password: "synthetic-test-password" }),
+    });
+    const response = await handler(login(preview));
+    assert.equal(response.status, 200);
+    const cookie = response.headers.get("set-cookie")!;
+    for (const flag of ["HttpOnly", "Secure", "SameSite=Strict"]) assert.ok(cookie.includes(flag));
+    const status = await handler(new Request("http://127.0.0.1:23000/api/auth/status", { headers: { cookie } }));
+    assert.equal((await status.json()).authenticated, true);
+    for (const origin of ["https://other.preview.example", "http://127.0.0.1:23000", "https://evil.example", "null", ""]) {
+      assert.equal((await handler(login(origin))).status, 403);
+    }
+    assert.equal((await handler(login(preview, { "sec-fetch-site": "cross-site" }))).status, 403);
+    delete process.env.APP_URL;
+    assert.throws(() => checkOrigin(login(preview)), /origin must match/);
+    Object.assign(process.env, { NODE_ENV: "production", APP_URL: preview });
+    assert.equal((await handler(login(preview))).status, 404);
+  });
+});
+
 test("checkout origin checks reject other brands, admin origins, absent origin and cross-site submissions", async () => {
   await configured(() => {
     assert.doesNotThrow(() => checkOrigin(mutation(first, first)));

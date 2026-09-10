@@ -6,6 +6,8 @@ A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, 
 
 ## System overview
 
+**Resuming work? Start with [the current handoff and next-step plan](docs/HANDOFF.md).** Update it with every completed shipment, then commit and push the code, tests and documentation together. Never publish runtime secrets or private workspace data.
+
 Read the [system overview and intended live workflow](docs/SYSTEM_OVERVIEW.md) for the component breakdown, owner/customer journeys, Shopify and Whop responsibilities, checkout-subdomain plan, data boundaries, and launch gates.
 
 The intended arrangement is Shopify storefronts → brand-specific Limitless checkout pages → supported Whop payment collection → reliable Shopify order synchronization. The custom checkout design and domain-routing isolation exist; live payment collection, Shopify cart handoff/order writes, shopper-facing shipping/tax integration, personalized-product handling, and webhooks are still pending. Shopify should remain the source of truth for existing products, markets, shipping, and fulfillment—not require the owner to recreate those settings in Limitless.
