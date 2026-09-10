@@ -118,6 +118,7 @@ function verifiedProxyMutation(request: Request, site: ReturnType<typeof request
   if (request.headers.get("origin") !== proxy.internal || request.headers.get("host") !== "localhost:3000" || request.headers.get("x-limitless-origin") !== proxy.public) return false;
   const token = request.headers.get("x-limitless-csrf") || "";
   const cookie = cookieValue(request, CSRF_COOKIE);
+  if (!cookie && token && validCsrf(request, token, proxy.public)) throw new HttpError(403, "The sign-in security cookie is missing or invalid. Open the workspace in its own tab; do not change your password.");
   return !!token && token.length <= 200 && cookie.length <= 200 && safeEqual(token, cookie) && validCsrf(request, token, proxy.public);
 }
 

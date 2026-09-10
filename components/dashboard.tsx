@@ -50,7 +50,7 @@ import { CheckoutPreview } from "@/components/checkout";
 import { CheckoutSettings } from "@/components/checkout-settings";
 import { checkoutExperience } from "@/lib/checkout";
 import { accountDetails } from "@/lib/accounts";
-import { dashboardFetch } from "@/lib/client-api";
+import { dashboardFetch, isEmbeddedWorkspace } from "@/lib/client-api";
 import {
   AccountDetailsForm,
   AccountDetailsSummary,
@@ -2443,6 +2443,10 @@ function Login({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [embedded, setEmbedded] = useState<boolean | null>(null);
+  useEffect(() => {
+    setEmbedded(isEmbeddedWorkspace());
+  }, []);
   return (
     <main className="login-screen">
       <div className="login-decoration">
@@ -2476,31 +2480,53 @@ function Login({ onSuccess }: { onSuccess: () => Promise<void> }) {
         <span className="brand-symbol">
           <InfinityIcon size={28} />
         </span>
-        <h2>Welcome back.</h2>
-        <p>Your workspace is right where you left it.</p>
-        <label className="field">
-          Workspace password
-          <input
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
-        {error && (
-          <div className="inline-error" role="alert">
-            {error}
-          </div>
+        <h2>{embedded ? "Open your secure workspace." : "Welcome back."}</h2>
+        <p>
+          {embedded
+            ? "Embedded previews can block the security cookies needed for private sign-in. Open Limitless in its own tab to continue."
+            : "Your workspace is right where you left it."}
+        </p>
+        {embedded ? (
+          <a
+            className="button primary full-width"
+            href="/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink size={16} />
+            Open secure sign-in
+          </a>
+        ) : (
+          <>
+            <label className="field">
+              Workspace password
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                disabled={embedded === null}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            {error && (
+              <div className="inline-error" role="alert">
+                {error}
+              </div>
+            )}
+            <button
+              className="button primary full-width"
+              disabled={busy || embedded === null}
+            >
+              {busy ? (
+                <LoaderCircle size={16} className="spin" />
+              ) : (
+                <ArrowRight size={16} />
+              )}
+              Open workspace
+            </button>
+          </>
         )}
-        <button className="button primary full-width" disabled={busy}>
-          {busy ? (
-            <LoaderCircle size={16} className="spin" />
-          ) : (
-            <ArrowRight size={16} />
-          )}
-          Open workspace
-        </button>
         <span className="login-secure">
           <LockKeyhole size={12} />
           Private access for your brand team.

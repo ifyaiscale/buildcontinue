@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dashboardFetch } from "../lib/client-api";
+import { dashboardFetch, isEmbeddedWorkspace } from "../lib/client-api";
 
 test("dashboard client shares concurrent challenges and refreshes them for later sessions", async () => {
   const originalFetch = globalThis.fetch;
@@ -43,4 +43,27 @@ test("dashboard client supports ordinary deployments and does not submit mutatio
     await assert.rejects(dashboardFetch("/api/auth/login", { method: "POST" }), /prepare secure access/);
     assert.equal(mutations, 1);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("embedded private login never sends a password, while standalone login and demo mutations remain available", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const frame = { top: {}, self: {} };
+  Object.defineProperty(globalThis, "window", { configurable: true, value: frame });
+  const calls: string[] = [];
+  globalThis.fetch = async path => { calls.push(String(path)); return Response.json(path === "/api/auth/csrf" ? { token: null } : { ok: true }); };
+  try {
+    assert.equal(isEmbeddedWorkspace(), true);
+    await assert.rejects(dashboardFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ password: "synthetic-only" }) }), /own tab/);
+    assert.equal(calls.length, 0);
+    await dashboardFetch("/api/brands", { method: "POST" });
+    assert.deepEqual(calls, ["/api/auth/csrf", "/api/brands"]);
+    frame.top = frame.self;
+    assert.equal(isEmbeddedWorkspace(), false);
+    await dashboardFetch("/api/auth/login", { method: "POST" });
+    assert.equal(calls.at(-1), "/api/auth/login");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window");
+  }
 });

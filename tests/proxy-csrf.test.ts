@@ -51,12 +51,21 @@ test("missing, forged, mismatched, duplicate, stale and oversized CSRF proofs fa
   const future = csrfChallenge(get(), Date.now() + 16 * 60 * 1000);
   const tampered = `${first.token!.slice(0, -1)}${first.token!.endsWith("a") ? "b" : "a"}`;
   for (const [token, cookie] of [
-    ["", ""], [first.token!, ""], ["", cookiePair(first.cookie!)],
+    ["", ""], ["", cookiePair(first.cookie!)],
     [second.token!, cookiePair(first.cookie!)], [expired.token!, cookiePair(expired.cookie!)], [future.token!, cookiePair(future.cookie!)],
     [tampered, `__Host-limitless_csrf=${tampered}`], ["x".repeat(500), `__Host-limitless_csrf=${"x".repeat(500)}`],
-    [first.token!, `${cookiePair(first.cookie!)}; ${cookiePair(first.cookie!)}`],
   ]) assert.throws(() => checkOrigin(post(token, cookie)), /origin must match/);
   assert.equal(csrfChallenge(get(cookiePair(first.cookie!))).token, first.token);
+}));
+
+test("a valid proof without an unambiguous browser cookie is rejected with actionable guidance", async () => configured(async () => {
+  const proof = csrfChallenge(get()); const cookie = cookiePair(proof.cookie!);
+  const handler = route(handleApi);
+  for (const cookies of ["", `${cookie}; ${cookie}`]) {
+    const response = await handler(post(proof.token!, cookies));
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, "The sign-in security cookie is missing or invalid. Open the workspace in its own tab; do not change your password.");
+  }
 }));
 
 test("proxy fallback requires exact routing tuple, canonical client origin, JSON and non-cross-site requests", async () => configured(() => {

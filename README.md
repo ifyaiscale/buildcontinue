@@ -154,7 +154,7 @@ Keep `APP_URL` set to the exact external HTTPS origin. If a development proxy re
 
 Dashboard mutations obtain a short-lived signed proof from `GET /api/auth/csrf`. The server requires an exact proxy origin/host, the configured public origin in the client header, a matching `Secure; HttpOnly; SameSite=Strict` host-prefix cookie, and a valid proof bound to that public origin and the current session. An anonymous proof can only authorize login; it must be refreshed after login/logout. Missing/tampered/expired proofs and cross-site requests remain rejected. Normal deployments receive no proof and retain the usual exact-origin checks; no CORS permission is added.
 
-This adapter covers dashboard authentication and brand management only, not public checkout POSTs or mapped checkout hosts. Use the standalone HTTPS Preview tab because an embedded cross-site iframe may block strict cookies. Prefer a proxy that preserves the original origin/host; never work around this by adding a localhost/wildcard origin allowlist or disabling CSRF checks.
+This adapter covers dashboard authentication and brand management only, not public checkout POSTs or mapped checkout hosts. Embedded private login displays **Open secure sign-in** instead of accepting a password; this opens the workspace in its own tab because cross-site iframes can block strict security cookies. Embedded demo actions remain available. Missing/invalid sign-in cookies produce explicit guidance while still failing with 403. Prefer a proxy that preserves the original origin/host; never work around this by adding a localhost/wildcard origin allowlist or disabling CSRF checks.
 
 | Route | Purpose |
 | --- | --- |

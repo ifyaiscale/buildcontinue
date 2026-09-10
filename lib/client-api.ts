@@ -1,5 +1,9 @@
 let pendingChallenge: Promise<string | null> | null = null;
 
+export function isEmbeddedWorkspace() {
+  return typeof window !== "undefined" && window.top !== window.self;
+}
+
 function challenge() {
   if (!pendingChallenge) {
     pendingChallenge = fetch("/api/auth/csrf", { cache: "no-store", credentials: "same-origin", redirect: "error" })
@@ -15,6 +19,7 @@ function challenge() {
 
 export async function dashboardFetch(path: string, options: RequestInit = {}) {
   if (!path.startsWith("/api/") || path.startsWith("//")) throw new Error("Use a workspace API path.");
+  if (path === "/api/auth/login" && isEmbeddedWorkspace()) throw new Error("Open secure sign-in in its own tab. Embedded previews can block security cookies.");
   const headers = new Headers(options.headers);
   if (!["GET", "HEAD", "OPTIONS"].includes((options.method || "GET").toUpperCase())) {
     // Fetch again after login/logout so the token follows the current session.
