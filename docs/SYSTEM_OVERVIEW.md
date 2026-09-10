@@ -150,6 +150,7 @@ For the current SQLite architecture, a paid single-instance web service with a p
 | Provider read-access verification and catalog import | Implemented; real account credentials still needed for deployment verification |
 | Supported Shopify/Whop physical-product architecture | Unconfirmed; must be resolved before live implementation is finalized |
 | Shopify cart handoff, personalization, live totals and inventory handling | Not implemented |
+| Admin-only Shopify shipping/tax calculation | Implemented diagnostic for guest US/USD simple variants; fixture-tested, actual store parity not verified |
 | Whop payment session creation and embedded live collection | Not implemented |
 | Signed webhooks, reliable Shopify order writes, recovery/refunds | Not implemented |
 | Checkout-domain routing and per-host origin/admin isolation | Implemented and regression-tested; real domains not configured |
@@ -160,7 +161,7 @@ Do not replace `environment.liveEnabled = false` until these gates are backed by
 
 ## Verification and next steps
 
-Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run build` with Node.js 24. The current automated suite covers 32 tests, including registered-host isolation, same-host mutations, draft privacy, and rejection of unknown hosts or invalid mappings. Earlier browser checks exercised account creation/editing, invalid-ID feedback, saved provider prefills, disabled credential entry in demo, desktop/mobile checkout, an itemized demo purchase, and discount expiration without countdown resets. This evidence is for the implemented demo and account-management behavior, not real payments.
+Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run build` with Node.js 24. The automated suite includes registered-host isolation, same-host mutations, draft privacy, rejection of unknown hosts or invalid mappings, and protected Shopify pricing diagnostics. Pricing tests use synthetic provider responses, not merchant accounts. Earlier browser checks exercised account creation/editing, invalid-ID feedback, saved provider prefills, disabled credential entry in demo, desktop/mobile checkout, an itemized demo purchase, and discount expiration without countdown resets. This evidence is for the implemented demo and account-management behavior, not real payments.
 
 Next engineering priority: confirm the supported physical-product/payment-to-Shopify architecture, including personalization and shipping/tax calculations. Then implement and test the live flow, prepare the secure deployment, migrate data privately, connect actual accounts, and configure verified checkout domains. Obtain explicit approval before any real charge/refund test.
 

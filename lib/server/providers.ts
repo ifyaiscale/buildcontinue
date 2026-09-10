@@ -16,22 +16,23 @@ async function remote(url: string, init: RequestInit) {
   catch { throw new HttpError(502, "Provider returned an invalid response."); }
 }
 
-async function graphql(credentials: ShopifyCredentials, query: string, variables: object = {}) {
+export async function shopifyGraphql(credentials: ShopifyCredentials, query: string, variables: object = {}) {
   // Never accept arbitrary hosts or follow redirects with an access token.
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(credentials.domain)) throw new HttpError(422, "Use your permanent .myshopify.com domain.");
   const result = await remote(`https://${credentials.domain}/admin/api/${version}/graphql.json`, {
     method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": credentials.accessToken }, body: JSON.stringify({ query, variables }),
   });
-  if (!result.data || result.errors?.length) throw new HttpError(422, "Shopify could not complete this request. Verify the app has read_products and read_inventory permissions.");
+  if (!result?.data || result.errors?.length) throw new HttpError(422, "Shopify could not complete this request. Check the required permissions and supported input.");
   return result.data;
 }
 
-export async function verifyShopify(credentials: ShopifyCredentials) {
-  const data = await graphql(credentials, `{ shop { name myshopifyDomain currencyCode } currentAppInstallation { accessScopes { handle } } }`);
+export async function verifyShopify(credentials: ShopifyCredentials, additionalScopes: readonly string[] = []) {
+  const data = await shopifyGraphql(credentials, `{ shop { name myshopifyDomain currencyCode } currentAppInstallation { accessScopes { handle } } }`);
   const parsed = z.object({ shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string() }), currentAppInstallation: z.object({ accessScopes: z.array(z.object({ handle: z.string() })) }) }).safeParse(data);
   if (!parsed.success || parsed.data.shop.myshopifyDomain !== credentials.domain) throw new HttpError(422, "Shopify account did not match the requested store.");
   const scopes = parsed.data.currentAppInstallation.accessScopes.map(s => s.handle);
   if (!scopes.some(s => s === "read_products" || s === "write_products") || !scopes.some(s => s === "read_inventory" || s === "write_inventory")) throw new HttpError(422, "Grant read_products and read_inventory to import the product catalog safely.");
+  if (additionalScopes.some(scope => !scopes.includes(scope))) throw new HttpError(422, `Grant ${additionalScopes.join(" and ")} before running this operation.`);
   if (parsed.data.shop.currencyCode !== "USD") throw new HttpError(422, "This MVP supports USD stores only. Multi-currency pricing must be implemented before importing this store.");
   return credentials.domain;
 }
@@ -54,7 +55,7 @@ export async function syncShopify(credentials: ShopifyCredentials): Promise<Prod
   await verifyShopify(credentials);
   const products: Product[] = []; let cursor: string | null = null;
   for (let page = 0; page < 20; page++) {
-    const data = await graphql(credentials, `query Catalog($after: String) { productVariants(first: 100, after: $after, query: "product_status:active") { nodes { id title price compareAtPrice inventoryQuantity inventoryPolicy inventoryItem { tracked } image { url } product { title description status featuredImage { url } } } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
+    const data = await shopifyGraphql(credentials, `query Catalog($after: String) { productVariants(first: 100, after: $after, query: "product_status:active") { nodes { id title price compareAtPrice inventoryQuantity inventoryPolicy inventoryItem { tracked } image { url } product { title description status featuredImage { url } } } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
     const parsed = z.object({ productVariants: z.object({ nodes: z.array(variantSchema), pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }) }) }).safeParse(data);
     if (!parsed.success) throw new HttpError(502, "Shopify returned an unsupported catalog response.");
     for (const variant of parsed.data.productVariants.nodes) {

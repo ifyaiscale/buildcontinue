@@ -6,6 +6,7 @@ import { connectionInput, loginInput, publishInput } from "./validation";
 import { syncShopify, verifyShopify, verifyWhop, type ShopifyCredentials } from "./providers";
 import { accountDetails } from "../accounts";
 import { requestSite, requireSitePath } from "./hosts";
+import { calculatePaymentQuote } from "./payment-quote";
 
 function publicBrand(brand: Brand): Brand {
   const { accountDetails: _accountDetails, ...publicFields } = brand;
@@ -50,10 +51,19 @@ export async function handleApi(request: Request): Promise<Response> {
     if (key && !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
     return json(db.checkout(slug, await body(request), allowDraft, key), 201);
   }
-  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish))?$/);
+  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote))?$/);
   if (brandRoute) {
     const [, brandId, action] = brandRoute;
     requireAdmin(request);
+    if (action === "payment-quote" && method === "POST") {
+      requireCredentials(request); rateLimit("payment-quote", 10, 60000);
+      const db = store(); const brand = db.brand(brandId);
+      const credentials = db.credential<ShopifyCredentials>(brandId, "shopify");
+      const result = await calculatePaymentQuote(brand, credentials, await body(request));
+      const current = db.credential<ShopifyCredentials>(brandId, "shopify");
+      if (current.domain !== credentials.domain || current.accessToken !== credentials.accessToken) throw new HttpError(409, "Connection changed during calculation. Request a new calculation.");
+      return json(result);
+    }
     if (!action && method === "PATCH") return json(store().updateBrand(brandId, await body(request)));
     if (action === "products" && method === "POST") {
       rateLimit("test-product-create", 60, 60000);
@@ -100,4 +110,4 @@ export async function handleApi(request: Request): Promise<Response> {
 }
 
 const handler = route(handleApi);
-export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as checkoutGet, handler as checkoutPost, handler as authStatus, handler as login, handler as logout };
+export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as paymentQuote, handler as checkoutGet, handler as checkoutPost, handler as authStatus, handler as login, handler as logout };

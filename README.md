@@ -8,7 +8,9 @@ A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, 
 
 Read the [system overview and intended live workflow](docs/SYSTEM_OVERVIEW.md) for the component breakdown, owner/customer journeys, Shopify and Whop responsibilities, checkout-subdomain plan, data boundaries, and launch gates.
 
-The intended arrangement is Shopify storefronts → brand-specific Limitless checkout pages → supported Whop payment collection → reliable Shopify order synchronization. The custom checkout design exists; live payment collection, Shopify cart handoff/order writes, shipping/tax integration, personalized-product handling, webhooks, and custom-domain routing are still pending. Shopify should remain the source of truth for existing products, markets, shipping, and fulfillment—not require the owner to recreate those settings in Limitless.
+The intended arrangement is Shopify storefronts → brand-specific Limitless checkout pages → supported Whop payment collection → reliable Shopify order synchronization. The custom checkout design and domain-routing isolation exist; live payment collection, Shopify cart handoff/order writes, shopper-facing shipping/tax integration, personalized-product handling, and webhooks are still pending. Shopify should remain the source of truth for existing products, markets, shipping, and fulfillment—not require the owner to recreate those settings in Limitless.
+
+See the [payment implementation plan](docs/PAYMENT_IMPLEMENTATION_PLAN.md) for the conditional architecture, account-confirmation questions, acceptance gates, and the implemented **admin-only Shopify shipping/tax preflight**. It calculates without creating a draft or charging a customer; it is not a payable quote or proof of Shopify Checkout parity.
 
 ## What works today
 
@@ -151,6 +153,7 @@ All responses are JSON; errors have `{ "error": "…" }`. Management routes requ
 | `PATCH /api/brands/:id` | Validated name/category/domain/accent, checkoutTitle, announcement, supportEmail, shippingPrice, freeShippingThreshold, checkoutExperience, and accountDetails; no connection-status or credential assignment |
 | `POST /api/brands/:id/connections` | `{provider:"shopify",domain,accessToken}` or `{provider:"whop",companyId,apiKey,webhookSecret?}`; authenticated secure deployments only |
 | `POST /api/brands/:id/products/sync` | Read and replace Shopify catalog; authenticated secure deployments only |
+| `POST /api/brands/:id/payment-quote` | Diagnostic US/USD Shopify draft calculation with current shipping rates/taxes; requires protected admin access and `write_draft_orders`; never creates an order or enables payments |
 | `POST /api/brands/:id/products` | `{title, description?, price}` → add a manual test product to a demo brand |
 | `POST /api/brands/:id/publish` | `{mode:"demo"}`; requires an available product. `live` explicitly blocked |
 | `GET /api/checkout/:slug` | Sanitized brand, no provider account identifiers; drafts need admin/demo access |

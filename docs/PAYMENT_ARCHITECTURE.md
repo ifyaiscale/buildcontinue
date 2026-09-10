@@ -18,12 +18,16 @@ Shopify's [App Store requirements, §1.1.2](https://shopify.dev/docs/apps/launch
 
 Before finalizing the external-payment design, confirm with Shopify whether the specific automated Whop-payment/order-sync workflow is supported for these stores, how transactions must be classified, and which fees apply. Confirm with Whop that the actual products and accounts support the required embedded DTC flow, currencies, fulfillment, refunds, disputes, and tax responsibilities. No such confirmation has been obtained here.
 
-## Candidate paths — not implemented or selected
+## Integration paths — live use remains unapproved
 
 1. **Lowest integration uncertainty:** preserve Shopify Checkout via `checkoutUrl`. Use Whop there only if a supported, approved integration is confirmed. This does not promise the same fully custom checkout layout.
 2. **Conditional external flow:** calculate and validate a Shopify draft → retain an expiring server-owned quote → create a Whop payment checkout → verify a signed payment event and authoritative amount/currency/account → complete that draft once. This needs provider confirmation and account-specific tests before adoption.
 
 A generic public API that completes a Shopify Storefront Cart using an arbitrary Whop receipt has not been established. Do not rely on Shopify internal checkout endpoints or obsolete completion APIs.
+
+The [implementation plan](PAYMENT_IMPLEMENTATION_PLAN.md) uses the conditional external flow as the working design, with Shopify Checkout as the fallback if provider support cannot be established. This is an engineering direction, not a claim of merchant approval. The first implemented slice is an authenticated Shopify draft-calculation diagnostic; no live session, draft creation/completion, or webhook handler is implemented.
+
+Whop describes a checkout configuration as reusable; creating a configuration for a quote does not guarantee a single payment. Deduplicate individual payment IDs **and** enforce one fulfillment result per quote, recording additional successful payments for reconciliation/refund review rather than silently ignoring money received. Do not assume an idempotency feature documented for Whop's Experimental API also applies to the chosen v1 endpoint without verifying that endpoint's contract.
 
 ## Required pre-launch implementation and acceptance
 
