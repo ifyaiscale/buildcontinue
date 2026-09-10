@@ -60,12 +60,73 @@ export function requireCredentials(request: Request) {
   if (demoMode()) throw new HttpError(403, "Real connections are disabled in the public demo. Configure administrator authentication and credential encryption first.");
   if (!encryptionConfigured()) throw new HttpError(503, "Set a 32-byte CREDENTIAL_ENCRYPTION_KEY before connecting accounts.");
 }
+
+const CSRF_COOKIE = "__Host-limitless_csrf";
+const CSRF_SECONDS = 15 * 60;
+
+function proxyOrigin() {
+  if (process.env.NODE_ENV !== "development" || !process.env.DEV_PROXY_ORIGIN) return null;
+  const publicOrigin = process.env.APP_URL || "";
+  let url: URL;
+  try { url = new URL(publicOrigin); }
+  catch { throw new HttpError(503, "Configure an exact HTTPS APP_URL before enabling the development proxy."); }
+  if (process.env.DEV_PROXY_ORIGIN !== "http://localhost:3000" || url.protocol !== "https:" || url.origin !== publicOrigin || !authConfigured()) {
+    throw new HttpError(503, "Development proxy access requires http://localhost:3000, an exact HTTPS APP_URL, and private authentication.");
+  }
+  return { internal: process.env.DEV_PROXY_ORIGIN, public: publicOrigin };
+}
+
+function cookieValue(request: Request, name: string) {
+  const values = (request.headers.get("cookie") || "").split(";").map(value => value.trim()).filter(value => value.startsWith(`${name}=`));
+  return values.length === 1 ? values[0].slice(name.length + 1) : "";
+}
+
+function csrfSignature(request: Request, payload: string, publicOrigin: string) {
+  const binding = signature(`csrf-session:${authenticated(request) ? cookieValue(request, COOKIE) : "anonymous"}`);
+  return signature(JSON.stringify(["limitless-csrf-v1", publicOrigin, binding, payload]));
+}
+
+function validCsrf(request: Request, token: string, publicOrigin: string, now = Date.now()) {
+  if (token.length > 200) return false;
+  const match = /^(\d{10})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})$/.exec(token);
+  if (!match) return false;
+  const expires = Number(match[1]); const seconds = Math.floor(now / 1000);
+  return expires > seconds && expires <= seconds + CSRF_SECONDS && safeEqual(match[3], csrfSignature(request, `${match[1]}.${match[2]}`, publicOrigin));
+}
+
+export function csrfChallenge(request: Request, now = Date.now()) {
+  const proxy = proxyOrigin();
+  if (!proxy) return { token: null, cookie: null };
+  const site = requestSite(request);
+  requireSitePath(site, "/api/auth/csrf");
+  if (site.kind !== "admin" || site.origin !== proxy.public || request.headers.get("host") !== "localhost:3000" || request.headers.get("sec-fetch-site") === "cross-site") throw new HttpError(403, "Open the private workspace directly to sign in.");
+  rateLimit("csrf", 120, 60000);
+  let token = cookieValue(request, CSRF_COOKIE);
+  if (!validCsrf(request, token, proxy.public, now)) {
+    const payload = `${Math.floor(now / 1000) + CSRF_SECONDS}.${randomBytes(32).toString("base64url")}`;
+    token = `${payload}.${csrfSignature(request, payload, proxy.public)}`;
+  }
+  return { token, cookie: `${CSRF_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${CSRF_SECONDS}` };
+}
+
+function verifiedProxyMutation(request: Request, site: ReturnType<typeof requestSite>) {
+  const proxy = proxyOrigin();
+  if (!proxy || site.kind !== "admin" || site.origin !== proxy.public) return false;
+  const path = new URL(request.url).pathname;
+  if (path !== "/api/auth/login" && !authenticated(request)) return false;
+  if (path !== "/api/auth/login" && path !== "/api/auth/logout" && !/^\/api\/brands(?:\/|$)/.test(path)) return false;
+  if (request.headers.get("origin") !== proxy.internal || request.headers.get("host") !== "localhost:3000" || request.headers.get("x-limitless-origin") !== proxy.public) return false;
+  const token = request.headers.get("x-limitless-csrf") || "";
+  const cookie = cookieValue(request, CSRF_COOKIE);
+  return !!token && token.length <= 200 && cookie.length <= 200 && safeEqual(token, cookie) && validCsrf(request, token, proxy.public);
+}
+
 export function checkOrigin(request: Request) {
   const site = requestSite(request);
   requireSitePath(site, new URL(request.url).pathname);
   const expected = site.origin;
   const origin = request.headers.get("origin");
-  if (!origin || origin !== expected || request.headers.get("sec-fetch-site") === "cross-site") throw new HttpError(403, "Request origin must match the application origin.");
+  if (!origin || request.headers.get("sec-fetch-site") === "cross-site" || (origin !== expected && !verifiedProxyMutation(request, site))) throw new HttpError(403, "Request origin must match the application origin.");
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") throw new HttpError(415, "Use application/json.");
 }
 

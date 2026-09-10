@@ -50,6 +50,7 @@ import { CheckoutPreview } from "@/components/checkout";
 import { CheckoutSettings } from "@/components/checkout-settings";
 import { checkoutExperience } from "@/lib/checkout";
 import { accountDetails } from "@/lib/accounts";
+import { dashboardFetch } from "@/lib/client-api";
 import {
   AccountDetailsForm,
   AccountDetailsSummary,
@@ -83,7 +84,7 @@ async function api<T>(
   method = "GET",
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await dashboardFetch(path, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,

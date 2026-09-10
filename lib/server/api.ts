@@ -1,5 +1,5 @@
 import type { AppState, Brand } from "../types";
-import { authenticated, authConfigured, demoMode, encryptionConfigured, HttpError, rateLimit, requireAdmin, requireCredentials, sessionCookie, verifyPassword } from "./security";
+import { authenticated, authConfigured, csrfChallenge, demoMode, encryptionConfigured, HttpError, rateLimit, requireAdmin, requireCredentials, sessionCookie, verifyPassword } from "./security";
 import { body, json, route } from "./http";
 import { store } from "./store";
 import { connectionInput, loginInput, publishInput } from "./validation";
@@ -18,6 +18,10 @@ export async function handleApi(request: Request): Promise<Response> {
   const method = request.method;
   const site = requestSite(request);
   requireSitePath(site, path);
+  if (path === "/api/auth/csrf" && method === "GET") {
+    const challenge = csrfChallenge(request);
+    return json({ token: challenge.token }, 200, challenge.cookie ? { "Set-Cookie": challenge.cookie } : {});
+  }
   if (path === "/api/auth/status" && method === "GET") return json({ authenticated: authenticated(request), configured: authConfigured(), demo: demoMode() });
   if (path === "/api/auth/login" && method === "POST") {
     // A global bucket cannot be bypassed by spoofing proxy/IP headers.
@@ -110,4 +114,4 @@ export async function handleApi(request: Request): Promise<Response> {
 }
 
 const handler = route(handleApi);
-export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as paymentQuote, handler as checkoutGet, handler as checkoutPost, handler as authStatus, handler as login, handler as logout };
+export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as paymentQuote, handler as checkoutGet, handler as checkoutPost, handler as authStatus, handler as csrf, handler as login, handler as logout };
