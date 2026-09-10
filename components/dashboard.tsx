@@ -447,7 +447,7 @@ export function Dashboard() {
               </div>
               <h1>
                 {view === "overview"
-                  ? "Good things are growing."
+                  ? "Your brands are growing."
                   : view === "brands"
                     ? "Your brands, all together."
                     : view === "orders"
