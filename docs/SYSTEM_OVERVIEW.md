@@ -86,7 +86,7 @@ Important limitations:
 
 ## Intended live workflow — design target, not implemented
 
-See [payment architecture evidence and remaining decisions](PAYMENT_ARCHITECTURE.md) for the current official API findings. The external-payment path below is conditional, not a confirmed Shopify/Whop integration.
+See [payment architecture evidence and remaining decisions](PAYMENT_ARCHITECTURE.md) for the current official API findings. The owner confirmed provider approval on 2026-09-10; the external-payment path below is the selected design, not yet a functioning, account-tested Shopify/Whop integration.
 
 ```text
 Shopify storefront and cart
@@ -102,7 +102,7 @@ Shopify storefront and cart
   → Limitless shows payment, order-sync, and exception status
 ```
 
-This architecture is conditional on a supported Shopify/Whop integration for the merchant's products and territories. Provider account setup or a successful read-access check does not establish payment permission, policy approval, supported physical-product fulfillment, or access to Shopify's complete checkout calculations.
+The owner has confirmed approval for this Shopify/Whop arrangement and the five-country USD launch scope. That confirmation is separate from technical acceptance: provider account setup or a successful read-access check does not establish functioning payment collection, physical-product fulfillment, or access to Shopify's complete checkout calculations.
 
 ### Responsibilities in the intended live system
 
@@ -148,9 +148,9 @@ For the current SQLite architecture, a paid single-instance web service with a p
 | Dashboard, account management, branded design | Implemented |
 | No-charge ordering and configurable demo extras | Implemented and regression-tested |
 | Provider read-access verification and catalog import | Implemented; real account credentials still needed for deployment verification |
-| Supported Shopify/Whop physical-product architecture | Unconfirmed; must be resolved before live implementation is finalized |
+| Supported Shopify/Whop physical-product architecture | Owner confirmed approval on 2026-09-10; operational account verification and implementation remain pending |
 | Shopify cart handoff, personalization, live totals and inventory handling | Not implemented |
-| Admin-only Shopify shipping/tax calculation | Implemented diagnostic for guest US/USD simple variants; fixture-tested, actual store parity not verified |
+| Admin-only Shopify shipping/tax calculation | Implemented diagnostic for guest US/CA/GB/NZ/AU simple variants in USD; fixture-tested, actual store parity not verified |
 | Whop payment session creation and embedded live collection | Not implemented |
 | Signed webhooks, reliable Shopify order writes, recovery/refunds | Not implemented |
 | Checkout-domain routing and per-host origin/admin isolation | Implemented and regression-tested; real domains not configured |
@@ -163,6 +163,6 @@ Do not replace `environment.liveEnabled = false` until these gates are backed by
 
 Run `npm ci`, `npm test`, `npm run typecheck`, and `npm run build` with Node.js 24. The automated suite includes registered-host isolation, same-host mutations, draft privacy, rejection of unknown hosts or invalid mappings, and protected Shopify pricing diagnostics. Pricing tests use synthetic provider responses, not merchant accounts. Earlier browser checks exercised account creation/editing, invalid-ID feedback, saved provider prefills, disabled credential entry in demo, desktop/mobile checkout, an itemized demo purchase, and discount expiration without countdown resets. This evidence is for the implemented demo and account-management behavior, not real payments.
 
-Next engineering priority: confirm the supported physical-product/payment-to-Shopify architecture, including personalization and shipping/tax calculations. Then implement and test the live flow, prepare the secure deployment, migrate data privately, connect actual accounts, and configure verified checkout domains. Obtain explicit approval before any real charge/refund test.
+Next engineering priority: implement and test the owner-approved physical-product/payment-to-Shopify flow, including personalization and verified shipping/tax calculations for US/CA/GB/NZ/AU in USD. Prepare the secure deployment, migrate data privately, connect actual accounts, and configure verified checkout domains. Obtain explicit approval before any real charge/refund test.
 
 The host-routing change was also checked against a local production build with an isolated synthetic database: alternating admin/two checkout `Host` headers, no shared cached brand content, rejection of unknown/cross-brand hosts and paths, an authenticated-only admin API, exact-origin demo submission, and browser rendering of a mapped root checkout without runtime errors. This does not verify real DNS, TLS, provider callbacks, or live payment processing.

@@ -1,24 +1,37 @@
 import { z } from "zod";
 import type { Brand } from "../types";
+import { CHECKOUT_CURRENCY, LAUNCH_COUNTRY_CODES } from "../markets";
 import { HttpError } from "./errors";
 import { shopifyGraphql, verifyShopify, type ShopifyCredentials } from "./providers";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const shippingHandle = z.string().min(1).max(2000);
+const postalPatterns = {
+  US: /^\d{5}(?:-\d{4})?$/,
+  CA: /^[A-Z]\d[A-Z] ?\d[A-Z]\d$/,
+  GB: /^(?:GIR ?0AA|[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2})$/,
+  NZ: /^\d{4}$/,
+  AU: /^\d{4}$/,
+};
+const shippingAddress = z.object({
+  firstName: text(80), lastName: text(80), address1: text(200),
+  address2: text(200).optional(), city: text(100),
+  provinceCode: z.string().trim().toUpperCase().regex(/^[A-Z]{2,3}$/).optional(),
+  zip: text(30).toUpperCase(), countryCode: z.enum(LAUNCH_COUNTRY_CODES),
+}).strict().superRefine((address, ctx) => {
+  if (!postalPatterns[address.countryCode].test(address.zip)) ctx.addIssue({ code: "custom", path: ["zip"], message: "Use a postal code matching the selected country." });
+  if (["US", "CA"].includes(address.countryCode) && !/^[A-Z]{2}$/.test(address.provinceCode ?? "")) ctx.addIssue({ code: "custom", path: ["provinceCode"], message: "A two-letter state or province code is required." });
+  if (address.countryCode === "AU" && !/^(ACT|NSW|NT|QLD|SA|TAS|VIC|WA)$/.test(address.provinceCode ?? "")) ctx.addIssue({ code: "custom", path: ["provinceCode"], message: "Select an Australian state or territory." });
+});
 export const paymentQuoteInput = z.object({
   items: z.array(z.object({
     productId: text(200), quantity: z.number().int().min(1).max(20),
   }).strict()).min(1).max(30).refine(items => new Set(items.map(item => item.productId)).size === items.length, "Duplicate products are not allowed"),
-  shippingAddress: z.object({
-    firstName: text(80), lastName: text(80), address1: text(200),
-    address2: text(200).optional(), city: text(100),
-    provinceCode: z.string().regex(/^[A-Z]{2}$/),
-    zip: z.string().regex(/^\d{5}(?:-\d{4})?$/), countryCode: z.literal("US"),
-  }).strict(),
+  shippingAddress,
   shippingRateHandle: shippingHandle.optional(),
 }).strict();
 
-const money = z.object({ amount: z.string(), currencyCode: z.literal("USD") });
+const money = z.object({ amount: z.string(), currencyCode: z.literal(CHECKOUT_CURRENCY) });
 const moneyBag = z.object({ shopMoney: money, presentmentMoney: money });
 const variantId = z.string().regex(/^gid:\/\/shopify\/ProductVariant\/[1-9]\d*$/);
 const calculationResponse = z.object({
@@ -80,7 +93,7 @@ export async function calculatePaymentQuote(brand: Brand, credentials: ShopifyCr
   await verifyShopify(credentials, ["write_draft_orders"]);
 
   const draftInput = {
-    lineItems, shippingAddress: request.shippingAddress, presentmentCurrencyCode: "USD",
+    lineItems, shippingAddress: request.shippingAddress, presentmentCurrencyCode: CHECKOUT_CURRENCY,
     acceptAutomaticDiscounts: false, taxExempt: false,
   };
   async function calculate(shippingRateHandle?: string) {
@@ -116,14 +129,14 @@ export async function calculatePaymentQuote(brand: Brand, credentials: ShopifyCr
     ...(!request.shippingRateHandle && !result.rates.length ? ["no_shipping_rates"] : []),
   ];
   return {
-    mode: "diagnostic" as const, paymentReady: false as const, currency: "USD" as const,
+    mode: "diagnostic" as const, paymentReady: false as const, currency: CHECKOUT_CURRENCY,
     status: blockers.length ? "blocked" : request.shippingRateHandle ? "calculated" : "shipping_selection_required",
     calculatedAt: new Date().toISOString(),
     shippingRates: result.rates, selectedShippingRateHandle: result.draft.shippingLine?.shippingRateHandle ?? null,
     totals: result.totals, warnings: result.draft.warnings, blockers,
     limitations: [
       "Diagnostic calculation only; not a reserved or payable quote.",
-      "Guest US/USD simple physical products only; no discounts, personalization, bundles, or customer exemptions.",
+      "Guest US/CA/GB/NZ/AU simple physical products in USD only; no discounts, personalization, bundles, or customer exemptions.",
       "Inventory is not reserved. Shopify Checkout and Markets parity require store-specific verification.",
       "Live Whop payments and Shopify order synchronization remain disabled.",
     ],

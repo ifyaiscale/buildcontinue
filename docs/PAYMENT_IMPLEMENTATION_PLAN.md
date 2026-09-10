@@ -4,7 +4,7 @@ Reviewed against Shopify Admin API **2026-07** and Whop documentation on 2026-09
 
 ## Working architecture
 
-Limitless remains a private, single-owner, multi-brand application. The working design, **conditional on provider confirmation**, is:
+Limitless remains a private, single-owner, multi-brand application. On 2026-09-10 the owner confirmed that the provider arrangement and physical-product businesses are approved. This is owner-provided confirmation, not independent provider/account verification. The selected design is:
 
 ```text
 Shopify storefront/cart
@@ -23,19 +23,26 @@ Each attempt binds one brand, immutable quote, Shopify store/draft and Whop comp
 
 If Shopify does not support this exact private external-payment arrangement, preserve Shopify Checkout and use Whop only through a confirmed supported integration. Do not circumvent Shopify's internal checkout or approved payment-extension requirements.
 
-## What is implemented in this change
+## Confirmed launch scope
+
+- Destinations: United States (`US`), Canada (`CA`), United Kingdom (`GB`, not `UK`), New Zealand (`NZ`) and Australia (`AU`).
+- Currency: **USD everywhere**, including storefront/checkout display, Shopify shop and presentment amounts, Whop checkout and recorded payments. The owner reports both providers are configured in USD. Destination selection must not switch to CAD, GBP, NZD or AUD.
+- The checkout country selector and server allowlist use the same five-country definition. USD-only does not establish Markets pricing, shipping, tax or import-duty parity; actual per-country provider acceptance remains necessary.
+- Commit and push every completed, verified change to GitHub. Never include credentials, customer records, attachments or unrelated workspace settings in that publication.
+
+## What is implemented
 
 `POST /api/brands/:id/payment-quote` is a **protected administrative diagnostic**, not a customer checkout endpoint:
 
 - Requires administrator authentication, encryption configuration, an exact admin origin and a matching verified Shopify connection. It is disabled in public demo mode and unavailable on checkout domains.
 - Rechecks store identity, USD currency, catalog scopes and `write_draft_orders`. Shopify requires the latter even though `draftOrderCalculate` does **not** create a draft.
-- Accepts only available imported variants from that brand and a US guest shipping address. Client prices, discounts, personalization and custom shipping charges are rejected.
+- Accepts only available imported variants from that brand and a guest shipping address in a launch country. Postal formats are country-specific; state/province codes are required for US/CA/AU, optional for GB/NZ. Client prices, discounts, personalization and custom shipping charges are rejected.
 - Requests shipping options, then recalculates a selected option using its freshly discovered Shopify handle. No cached/browser-supplied rate is converted to a custom shipping price.
 - Returns exact integer-cent totals, including explicit taxes and the `taxesIncluded` flag. It does not add tax twice or treat absent tax data as zero.
 - Blocks on Shopify warnings, missing shipping options and unsupported/incomplete responses. It validates returned variant identities and quantities and rejects changed/digital carts.
 - Creates no Shopify draft/order, reserves no stock, persists no customer address, calls no Whop endpoint and always returns `paymentReady: false`. Provider-returned amounts are diagnostic only, not locked prices.
 
-The first scope is deliberately **guest US/USD simple physical-product calculations**, not the final launch market. Customer exemptions, Markets parity, discount behavior, bundles, subscriptions, FACEJAMAS personalization and actual inventory guarantees still need implementation and acceptance checks. Even a warning-free draft calculation does not establish parity with Shopify Checkout.
+The diagnostic supports **guest US/CA/GB/NZ/AU simple physical-product calculations in USD**. Local address validation checks format, not deliverability; Shopify must supply valid shipping options. Customer exemptions, Markets parity, discount behavior, bundles, subscriptions, FACEJAMAS personalization and actual inventory guarantees still need implementation and acceptance checks. Even a warning-free draft calculation does not establish parity with Shopify Checkout.
 
 ### Request/response workflow
 
@@ -60,7 +67,7 @@ The initial response has `status: "shipping_selection_required"` or `"blocked"`.
 
 ## Remaining implementation sequence
 
-1. **Account/provider confirmation and pricing acceptance.** Verify the supported arrangement, currencies, selling countries, tax responsibilities, scopes/roles, fees and actual per-brand access. Compare this diagnostic with Shopify's expected totals for selected representative carts. Do not overwrite the public demo calculator with unverified provider behavior.
+1. **Account integration and pricing acceptance.** Provider approval and launch scope are owner-confirmed. Verify USD configuration, tax responsibilities, scopes/roles, fees and actual per-brand access. Compare this diagnostic with Shopify's expected totals for representative carts in each of the five countries, including cross-border shipping/tax and any duties. Do not overwrite the public demo calculator with unverified provider behavior.
 2. **Cart and quote lifecycle.** Authenticated brand-bound cart handoff; server validation of variants, quantities, discounts and personalization references; live availability checks; expiring immutable quotes. Requote after any address/rate/cart change. Reserve inventory on the corresponding draft and define reservation expiry behavior.
 3. **Payment session and durable ledger.** Persist an attempt before remote side effects. Store integer cents and immutable account/quote bindings; create the actual Whop checkout. Define the chosen endpoint's idempotency and recovery behavior before enabling retries. A reusable checkout configuration is not a one-charge guarantee.
 4. **Webhook inbox and reconciliation worker.** Verify signatures against raw bytes with the supported SDK/spec, enforce timestamp/replay checks, persist delivery before acknowledgment, and independently retrieve payment status/account/amount/currency/metadata. Deduplicate event IDs and payment IDs transactionally. Record a second successful payment against the same quote as an exception for refund review, not a second fulfillment order.
@@ -70,13 +77,13 @@ The initial response has `status: "shipping_selection_required"` or `"blocked"`.
 
 For the current SQLite implementation, plan a **single writable application instance with persistent storage**, not stateless/free ephemeral hosting or multiple replicas sharing an unsafe SQLite volume. A durable worker must recover jobs after restarts; fire-and-forget work after returning HTTP 200 is not a reliable payment queue. Hosting vendor/size can be selected after resource tests; no hosting purchase is required to implement these stages locally.
 
-## Decisions needing account-owner evidence
+## Account status and remaining operational details
 
-The code or public documentation cannot supply these answers:
+Provider approval and the five-country USD scope are owner-confirmed. Integration acceptance must still establish these operational details; the approval confirmation does not substitute for functioning credentials or completed payment code:
 
-- Shopify: Is this private automated flow—Shopify draft calculation/reservation, external Whop payment, then marking that draft paid and fulfilling in Shopify—supported for these specific stores/plans? Which transaction classification, fees, scopes and customer-data permissions apply?
-- Whop: Are the specific physical products and each company account approved for external embedded DTC checkout? Which test environment, currencies, payment methods, shipping/tax responsibilities, refund and dispute behavior apply? What protects the selected checkout flow from repeated successful payments?
-- Merchant: Which countries/currencies are required for the first launch, and which Shopify discounts, tax exemptions, bundles and personalization features are mandatory?
+- Shopify: Confirm effective scopes/roles, customer-data access, transaction classification, fees, shipping zones and tax/duty behavior against the actual accounts.
+- Whop: Verify test-environment access, effective USD payment methods, tax responsibilities, refunds/disputes and repeated-payment handling for each company.
+- Merchant: Specify required Shopify discounts, tax exemptions, bundles and personalization features as their implementation begins.
 
 Obtain provider answers through the owners' authenticated support channels. Never paste API keys, webhook secrets or customer data into a support-template document, chat transcript or Git commit. Provider capability documentation is not merchant-specific authorization.
 
@@ -84,7 +91,7 @@ Obtain provider answers through the owners' authenticated support channels. Neve
 
 Automated tests cover money parsing, input rejection, fresh shipping selection, tax-inclusive/zero-tax handling, warnings, changed/unsupported carts, missing scopes, outages, account mismatch, credential rotation and API security. They use **synthetic provider responses**, not actual accounts; no payment or order was created.
 
-Local verification: all 44 tests, TypeScript and the Next.js production build passed. A production HTTP smoke test with an isolated synthetic database confirmed unauthenticated access is rejected, missing connections fail closed, checkout hosts cannot reach the diagnostic, live publication remains blocked and no orders are added. Actual Shopify/Whop account connectivity, pricing parity and payment behavior remain unverified.
+The initial US-only milestone passed 44 tests, TypeScript, the production build and an isolated production HTTP security smoke test. The five-country extension passes all 49 tests, TypeScript and the production build, with coverage for each destination, address formats, USD-only rates/totals, absent shipping configurations and the shared demo-checkout allowlist. Browser verification of the country menu is pending: the managed Preview startup tool requires an optional promotion argument before any listener exists, blocking startup; this platform issue has been reported. Actual Shopify/Whop account connectivity, pricing parity and payment behavior remain unverified.
 
 - [Shopify draftOrderCalculate (2026-07)](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/draftOrderCalculate)
 - [CalculatedDraftOrder (2026-07)](https://shopify.dev/docs/api/admin-graphql/2026-07/objects/CalculatedDraftOrder)

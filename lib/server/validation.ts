@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LAUNCH_COUNTRY_CODES } from "../markets";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const domain = z.string().trim().toLowerCase().max(253).regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$|^$/, "Enter a domain without https:// or a path");
@@ -51,7 +52,7 @@ export const connectionInput = z.discriminatedUnion("provider", [
 export const checkoutInput = z.object({
   mode: z.literal("demo"),
   items: z.array(z.object({ productId: text(200), quantity: z.number().int().min(1).max(20) }).strict()).min(1).max(30).refine(items => new Set(items.map(i => i.productId)).size === items.length, "Duplicate products are not allowed"),
-  customer: z.object({ email: z.email().max(254), firstName: text(80), lastName: text(80), address: text(200), city: text(100), postalCode: text(30), country: text(80) }).strict(),
+  customer: z.object({ email: z.email().max(254), firstName: text(80), lastName: text(80), address: text(200), city: text(100), postalCode: text(30), country: z.enum(LAUNCH_COUNTRY_CODES) }).strict(),
   options: z.object({
     discountCode: z.string().trim().toUpperCase().max(30).regex(/^[A-Z0-9_-]*$/).optional(),
     tipPercent: z.union([z.literal(0), z.literal(5), z.literal(10), z.literal(15)]).optional(),

@@ -5,6 +5,8 @@ import { Store } from "../lib/server/store";
 import { handleApi } from "../lib/server/api";
 import { route } from "../lib/server/http";
 import { sessionCookie } from "../lib/server/security";
+import { CHECKOUT_CURRENCY, LAUNCH_COUNTRY_CODES } from "../lib/markets";
+import { checkoutInput } from "../lib/server/validation";
 
 const credentials = { domain: "test.myshopify.com", accessToken: "synthetic-token" };
 const variantId = "gid://shopify/ProductVariant/123";
@@ -13,6 +15,14 @@ const input = {
   shippingAddress: { firstName: "Test", lastName: "Buyer", address1: "123 Example Street", city: "Portland", provinceCode: "OR", zip: "97201", countryCode: "US" },
 };
 const money = (amount: string) => ({ amount, currencyCode: "USD" });
+const launchAddresses = [
+  { countryCode: "US", city: "Portland", provinceCode: "OR", zip: "97201" },
+  { countryCode: "CA", city: "Toronto", provinceCode: "ON", zip: "M5V 3A8" },
+  { countryCode: "GB", city: "London", zip: "SW1A 1AA" },
+  { countryCode: "NZ", city: "Auckland", zip: "1010" },
+  { countryCode: "AU", city: "Sydney", provinceCode: "NSW", zip: "2000" },
+];
+const addressFor = (address: (typeof launchAddresses)[number]) => ({ firstName: "Test", lastName: "Buyer", address1: "123 Example Street", ...address });
 const bag = (amount: string) => ({ shopMoney: money(amount), presentmentMoney: money(amount) });
 function calculation(selected = false) {
   return {
@@ -61,7 +71,7 @@ test("USD parsing is exact and rejects malformed, negative, sub-cent, and unsafe
   for (const value of ["", "-1", "1.001", "1e2", "Infinity", "NaN", " 1.00", "01.00", "+1", "1.", "90071992547409.92"]) assert.throws(() => usdCents(value), /unsupported USD/);
 });
 
-test("preflight accepts only bounded US guest variant requests, not customer prices or unsupported extras", () => {
+test("preflight accepts only bounded launch-market guest requests, not customer prices or unsupported extras", () => {
   assert.deepEqual(paymentQuoteInput.parse(input), input);
   for (const bad of [
     { ...input, total: 1 }, { ...input, shippingPrice: 0 }, { ...input, discountCode: "FREE" },
@@ -71,7 +81,7 @@ test("preflight accepts only bounded US guest variant requests, not customer pri
     { ...input, items: [{ ...input.items[0], quantity: 21 }] },
     { ...input, items: [{ ...input.items[0], price: 1 }] },
     { ...input, items: [{ ...input.items[0], customAttributes: [{ key: "photo", value: "private-file" }] }] },
-    { ...input, shippingAddress: { ...input.shippingAddress, countryCode: "CA" } },
+    { ...input, shippingAddress: { ...input.shippingAddress, countryCode: "DE" } },
     { ...input, shippingAddress: { ...input.shippingAddress, provinceCode: "" } },
     { ...input, shippingAddress: { ...input.shippingAddress, zip: "invalid" } },
   ]) assert.equal(paymentQuoteInput.safeParse(bad).success, false);
@@ -90,6 +100,80 @@ test("preflight discovers Shopify rates and totals without trusting the catalog 
   assert.deepEqual(db.db.prepare("SELECT total_changes() AS changes").get(), before);
   assert.doesNotMatch(JSON.stringify(result), /synthetic-token|123 Example Street|myshopify/);
 }));
+
+test("all five launch countries reach Shopify with their own address and USD for both shipping passes", async () => fixture(async db => {
+  assert.equal(CHECKOUT_CURRENCY, "USD");
+  assert.deepEqual(LAUNCH_COUNTRY_CODES, launchAddresses.map(address => address.countryCode));
+  for (const address of launchAddresses) {
+    const calls = mockProvider();
+    const shippingAddress = addressFor(address);
+    const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress, shippingRateHandle: "standard-rate" });
+    assert.equal(result.status, "calculated"); assert.equal(result.currency, "USD"); assert.equal(result.paymentReady, false);
+    assert.equal(calls.length, 3);
+    for (const call of calls.slice(1)) {
+      assert.equal(call.variables?.input.presentmentCurrencyCode, "USD");
+      assert.deepEqual(call.variables?.input.shippingAddress, shippingAddress);
+    }
+  }
+}));
+
+test("launch-market address validation handles international postcodes and required regional codes", () => {
+  for (const address of launchAddresses) assert.equal(paymentQuoteInput.safeParse({ ...input, shippingAddress: addressFor(address) }).success, true);
+  const canadian = paymentQuoteInput.parse({ ...input, shippingAddress: addressFor({ countryCode: "CA", city: "Toronto", provinceCode: "on", zip: " m5v 3a8 " }) });
+  assert.equal(canadian.shippingAddress.provinceCode, "ON"); assert.equal(canadian.shippingAddress.zip, "M5V 3A8");
+  for (const address of [
+    { countryCode: "US", city: "Portland", zip: "97201" },
+    { countryCode: "CA", city: "Toronto", zip: "M5V 3A8" },
+    { countryCode: "CA", city: "Toronto", provinceCode: "ON", zip: "97201" },
+    { countryCode: "AU", city: "Sydney", zip: "2000" },
+    { countryCode: "AU", city: "Sydney", provinceCode: "ZZ", zip: "2000" },
+    { countryCode: "AU", city: "Sydney", provinceCode: "NSW", zip: "20000" },
+    { countryCode: "NZ", city: "Auckland", zip: "101" },
+    { countryCode: "GB", city: "London", zip: "12345" },
+    { countryCode: "UK", city: "London", zip: "SW1A 1AA" },
+    { countryCode: "DE", city: "Berlin", zip: "10115" },
+  ]) assert.equal(paymentQuoteInput.safeParse({ ...input, shippingAddress: addressFor(address) }).success, false);
+});
+
+test("non-USD shipping or totals are rejected for every international launch country", async () => fixture(async db => {
+  for (const [countryCode, localCurrency] of [["CA", "CAD"], ["GB", "GBP"], ["NZ", "NZD"], ["AU", "AUD"]]) {
+    const address = launchAddresses.find(address => address.countryCode === countryCode)!;
+    for (const mutate of [
+      (draft: Calculation) => { draft.totalPriceSet.presentmentMoney.currencyCode = localCurrency; },
+      (draft: Calculation) => { draft.totalPriceSet.shopMoney.currencyCode = localCurrency; },
+      (draft: Calculation) => { draft.availableShippingRates[0].price.currencyCode = localCurrency; },
+    ]) {
+      mockProvider({ mutate });
+      await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) }), /unsupported pricing calculation/);
+    }
+  }
+}));
+
+test("launch-country allowlisting does not invent a shipping rate for unconfigured destinations", async () => fixture(async db => {
+  for (const address of launchAddresses) {
+    mockProvider({ mutate: draft => { draft.availableShippingRates = []; } });
+    const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) });
+    assert.equal(result.status, "blocked"); assert.deepEqual(result.blockers, ["no_shipping_rates"]);
+  }
+}));
+
+test("demo checkout enforces the same five countries and never switches currency", () => {
+  const db = new Store(":memory:");
+  try {
+    const order = { mode: "demo", items: [{ productId: "product_1", quantity: 1 }], customer: { email: "test@example.com", firstName: "Test", lastName: "Buyer", address: "123 Example Street", city: "Test City", postalCode: "1010", country: "US" } };
+    for (const country of LAUNCH_COUNTRY_CODES) {
+      const request = { ...order, customer: { ...order.customer, country } };
+      assert.equal(checkoutInput.safeParse(request).success, true);
+      const result = db.checkout("aure-studio", request, true);
+      assert.equal(db.orders().find(order => order.id === result.orderId)?.currency, "USD");
+    }
+    for (const country of ["DE", "FR", "NL", "UK", "", "United States"]) {
+      const request = { ...order, customer: { ...order.customer, country } };
+      assert.equal(checkoutInput.safeParse(request).success, false);
+      assert.throws(() => db.checkout("aure-studio", request, true));
+    }
+  } finally { db.db.close(); }
+});
 
 test("selected shipping is freshly discovered and applied by handle, never by a custom price", async () => fixture(async db => {
   const calls = mockProvider();
