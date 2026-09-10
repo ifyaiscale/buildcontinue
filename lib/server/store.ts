@@ -67,6 +67,12 @@ export class Store {
     const data = brandPatch.parse(input);
     return this.transaction(() => {
       const brand = this.brand(brandId);
+      if (data.accountDetails) {
+        for (const provider of ["shopify", "whop"] as const) {
+          const next = provider === "shopify" ? data.accountDetails.shopifyDomain : data.accountDetails.whopCompanyId;
+          if (brand[provider].status === "verified" && next !== brand[provider].account) throw new HttpError(409, `Verify the replacement ${provider} account in Connections before changing this identifier.`);
+        }
+      }
       const bumpId = data.checkoutExperience?.bumpProductId;
       if (bumpId && !brand.products.some(product => product.id === bumpId && product.available)) throw new HttpError(422, "Choose an available product from this brand for the order bump.");
       return this.saveBrand({ ...brand, ...data, logoInitial: (data.name ?? brand.name).charAt(0).toUpperCase() });

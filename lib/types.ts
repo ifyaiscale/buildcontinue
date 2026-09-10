@@ -5,6 +5,14 @@ export type Connection = {
   error?: string;
 };
 
+export type AccountDetails = {
+  shopifyDomain: string;
+  shopifyAliases: string[];
+  whopCompanyId: string;
+  storefrontAliases: string[];
+  customerAccountDomain: string;
+};
+
 export type Product = {
   id: string;
   title: string;
@@ -73,6 +81,7 @@ export type Brand = {
   products: Product[];
   createdAt: string;
   checkoutExperience?: CheckoutExperience;
+  accountDetails?: AccountDetails;
 };
 
 export type Order = {

@@ -49,11 +49,16 @@ import type { AppState, Brand, Order } from "@/lib/types";
 import { CheckoutPreview } from "@/components/checkout";
 import { CheckoutSettings } from "@/components/checkout-settings";
 import { checkoutExperience } from "@/lib/checkout";
+import { accountDetails } from "@/lib/accounts";
+import {
+  AccountDetailsForm,
+  AccountDetailsSummary,
+} from "@/components/account-details";
 import "@/app/checkout.css";
 
 type View =
   "overview" | "brands" | "orders" | "studio" | "connections" | "settings";
-type Modal = "brand" | "help" | "shopify" | "whop" | null;
+type Modal = "brand" | "help" | "shopify" | "whop" | "accounts" | null;
 const money = (value: number) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -719,6 +724,10 @@ export function Dashboard() {
                     <p>Connections are isolated to {selected.name}.</p>
                   </div>
                 </div>
+                <AccountDetailsSummary
+                  brand={selected}
+                  onEdit={() => setModal("accounts")}
+                />
                 <div className="connections-grid">
                   {(["shopify", "whop"] as const).map((provider) => (
                     <section className="panel connection-card" key={provider}>
@@ -761,12 +770,13 @@ export function Dashboard() {
                           </span>
                         ))}
                       </div>
-                      {selected[provider].account && (
-                        <div className="connected-account">
-                          <CheckCheck size={15} />
-                          {selected[provider].account}
-                        </div>
-                      )}
+                      {selected[provider].status === "verified" &&
+                        selected[provider].account && (
+                          <div className="connected-account">
+                            <CheckCheck size={15} />
+                            {selected[provider].account}
+                          </div>
+                        )}
                       <button
                         className="button secondary full-width"
                         onClick={() => setModal(provider)}
@@ -860,6 +870,30 @@ export function Dashboard() {
           }}
         />
       )}
+      {modal === "accounts" && selected && (
+        <ModalFrame
+          title="Edit account details"
+          subtitle={`Saved identifiers for ${selected.name}, not credentials.`}
+          onClose={() => setModal(null)}
+        >
+          <AccountDetailsForm
+            key={selected.id}
+            brand={selected}
+            onClose={() => setModal(null)}
+            onVerify={setModal}
+            onSave={async (domain, details) => {
+              await api(`/api/brands/${selected.id}`, "PATCH", {
+                domain,
+                accountDetails: details,
+              });
+              setModal(null);
+              await changed(
+                "Account details saved. Connection and live-payment status are unchanged.",
+              );
+            }}
+          />
+        </ModalFrame>
+      )}
       {(modal === "shopify" || modal === "whop") && selected && (
         <ConnectionModal
           provider={modal}
@@ -868,6 +902,7 @@ export function Dashboard() {
             !data.environment.demo && data.environment.credentialsConfigured
           }
           onClose={() => setModal(null)}
+          onEditDetails={() => setModal("accounts")}
           onConnected={async () => {
             setModal(null);
             await changed("Connection verified and securely saved.");
@@ -1861,6 +1896,8 @@ function BrandWizard({
   const [name, setName] = useState("");
   const [category, setCategory] = useState("Skincare & beauty");
   const [domain, setDomain] = useState("");
+  const [shopifyDomain, setShopifyDomain] = useState("");
+  const [whopCompanyId, setWhopCompanyId] = useState("");
   const [accent, setAccent] = useState("#3c5143");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1878,6 +1915,13 @@ function BrandWizard({
         category,
         domain,
         accent,
+        accountDetails: {
+          shopifyDomain,
+          whopCompanyId,
+          shopifyAliases: [],
+          storefrontAliases: [],
+          customerAccountDomain: "",
+        },
       });
       await onCreated(brand);
     } catch (err) {
@@ -1935,19 +1979,39 @@ function BrandWizard({
               </select>
             </label>
             <label className="field">
-              Shopify store domain{" "}
+              Primary storefront domain{" "}
               <span className="optional">optional for now</span>
               <input
                 maxLength={253}
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
+                placeholder="your-brand.com"
+              />
+            </label>
+            <label className="field">
+              Shopify API domain <span className="optional">optional</span>
+              <input
+                maxLength={253}
+                value={shopifyDomain}
+                onChange={(e) => setShopifyDomain(e.target.value)}
                 placeholder="your-brand.myshopify.com"
+              />
+            </label>
+            <label className="field">
+              Whop business ID <span className="optional">optional</span>
+              <input
+                maxLength={100}
+                value={whopCompanyId}
+                onChange={(e) => setWhopCompanyId(e.target.value)}
+                placeholder="biz_…"
               />
             </label>
             <p className="field-hint">
               <LockKeyhole size={12} />
-              Adding a domain does not connect your store. You’ll authorize it
-              separately.
+              The storefront is your public address; Shopify uses a
+              .myshopify.com API domain. Save your Whop business ID, never an
+              API key. These identifiers do not connect accounts or enable
+              payments. Add aliases later in Connections → Edit account details.
             </p>
           </>
         ) : (
@@ -2027,15 +2091,18 @@ function ConnectionModal({
   enabled,
   onClose,
   onConnected,
+  onEditDetails,
 }: {
   provider: "shopify" | "whop";
   brand: Brand;
   enabled: boolean;
   onClose: () => void;
   onConnected: () => Promise<void>;
+  onEditDetails: () => void;
 }) {
+  const details = accountDetails(brand);
   const [account, setAccount] = useState(
-    provider === "shopify" ? brand.shopify.account || brand.domain : "",
+    provider === "shopify" ? details.shopifyDomain : details.whopCompanyId,
   );
   const [secret, setSecret] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
@@ -2044,6 +2111,7 @@ function ConnectionModal({
   const [syncing, setSyncing] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!enabled) return;
     setSaving(true);
     setError("");
     try {
@@ -2077,6 +2145,44 @@ function ConnectionModal({
       onClose={onClose}
     >
       <form className="connection-form" onSubmit={submit}>
+        <div className="account-details-replacement">
+          <p>
+            Only saving IDs? Edit account details without entering keys.
+            Selecting an identifier here does not verify it.
+          </p>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={onEditDetails}
+          >
+            Edit account details
+          </button>
+        </div>
+        {provider === "shopify" &&
+          !details.shopifyDomain &&
+          details.shopifyAliases.length > 0 && (
+            <div className="account-details-candidates">
+              <p>
+                Confirm which known alias is the correct Shopify API domain.
+                Choose a candidate for verification:
+              </p>
+              {details.shopifyAliases.map((alias) => (
+                <button
+                  type="button"
+                  className="button secondary"
+                  key={alias}
+                  aria-pressed={account === alias}
+                  onClick={() => setAccount(alias)}
+                >
+                  {alias}
+                </button>
+              ))}
+              <p className="field-hint">
+                This selection is not saved or verified until verification
+                succeeds.
+              </p>
+            </div>
+          )}
         {!enabled && (
           <div className="soft-notice">
             <LockKeyhole size={21} />

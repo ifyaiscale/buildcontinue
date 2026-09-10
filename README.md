@@ -14,6 +14,16 @@ A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, 
 
 ## Important: not a live payment processor
 
+### Brand account details
+
+Use **Connections → Edit account details** to save a brand’s primary storefront domain, Shopify API domain, known Shopify aliases, Whop business ID, storefront aliases, and customer-account domain. The add-brand wizard also accepts the primary storefront, Shopify domain, and Whop business ID. These are account references, not credentials, and can be prepared before private deployment is configured.
+
+Storefront domains (for example `store.example`) are separate from the `.myshopify.com` domain used for Shopify Admin API calls. If multiple Shopify domains are known, keep them as aliases until the API domain is confirmed; saving an alias does not verify ownership. Whop business IDs use the `biz_…` format and are not API keys.
+
+Saving identifiers leaves provider connections unverified and live checkout disabled. The protected connection form prefills these saved IDs and verifies the provider before storing encrypted credentials. Successful verification updates the saved account mapping. Changing an already verified account requires verifying the replacement through Connections; a metadata edit cannot relabel an existing credential as belonging to another account. Failed verification preserves the previous verified connection.
+
+Saved account details are administrator workspace data and are omitted from public checkout responses. Actual merchant records stay in the private SQLite data directory, not in source code or seed fixtures. Moving the app to another deployment requires a secure migration of that database; publishing code alone does not transfer workspace records.
+
 ### Conversion-focused checkout design
 
 The checkout uses a Shopify-style contact/delivery/payment layout with a compact order summary, per-brand colors, and optional conversion blocks. In **Checkout studio**, expand the settings below shipping and save to publish the content changes for that brand:

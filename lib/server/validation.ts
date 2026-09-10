@@ -1,6 +1,17 @@
 import { z } from "zod";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
+const domain = z.string().trim().toLowerCase().max(253).regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$|^$/, "Enter a domain without https:// or a path");
+const shopifyDomain = z.string().trim().toLowerCase().max(253).regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$|^$/, "Enter a .myshopify.com domain, not a storefront URL");
+const whopCompanyId = z.string().trim().max(100).regex(/^biz_[a-zA-Z0-9]+$|^$/, "Enter a Whop business ID beginning with biz_");
+const uniqueDomains = (schema: typeof domain) => z.array(schema.refine(Boolean, "Do not include empty domains")).max(12).refine(values => new Set(values).size === values.length, "Each domain must be unique");
+export const accountDetailsInput = z.object({
+  shopifyDomain,
+  shopifyAliases: uniqueDomains(shopifyDomain),
+  whopCompanyId,
+  storefrontAliases: uniqueDomains(domain),
+  customerAccountDomain: domain,
+}).strict();
 const money = z.number().finite().min(0).max(100000).refine(n => Math.abs(n * 100 - Math.round(n * 100)) < 0.00001, "Use at most two decimal places");
 export const checkoutExperienceInput = z.object({
   showPaymentMethods: z.boolean(), showTrustBadges: z.boolean(), showReview: z.boolean(),
@@ -21,8 +32,9 @@ export const checkoutExperienceInput = z.object({
 });
 export const brandInput = z.object({
   name: text(80), category: text(60),
-  domain: z.string().trim().max(253).regex(/^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$|^$/, "Enter a domain without https:// or a path").default(""),
+  domain: domain.default(""),
   accent: z.string().regex(/^#[a-fA-F0-9]{6}$/).default("#3c5143"),
+  accountDetails: accountDetailsInput.optional(),
 }).strict();
 export const brandPatch = brandInput.partial().extend({
   domain: brandInput.shape.domain.removeDefault().optional(),
@@ -33,8 +45,8 @@ export const brandPatch = brandInput.partial().extend({
   checkoutExperience: checkoutExperienceInput.optional(),
 }).strict().refine(v => Object.keys(v).length > 0, "No changes provided");
 export const connectionInput = z.discriminatedUnion("provider", [
-  z.object({ provider: z.literal("shopify"), domain: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/), accessToken: text(1000) }).strict(),
-  z.object({ provider: z.literal("whop"), companyId: z.string().regex(/^biz_[a-zA-Z0-9]+$/).max(100), apiKey: text(1000), webhookSecret: text(1000).optional() }).strict(),
+  z.object({ provider: z.literal("shopify"), domain: shopifyDomain.refine(Boolean, "Enter your Shopify API domain"), accessToken: text(1000) }).strict(),
+  z.object({ provider: z.literal("whop"), companyId: whopCompanyId.refine(Boolean, "Enter your Whop business ID"), apiKey: text(1000), webhookSecret: text(1000).optional() }).strict(),
 ]);
 export const checkoutInput = z.object({
   mode: z.literal("demo"),

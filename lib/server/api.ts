@@ -4,9 +4,11 @@ import { body, json, route } from "./http";
 import { store } from "./store";
 import { connectionInput, loginInput, publishInput } from "./validation";
 import { syncShopify, verifyShopify, verifyWhop, type ShopifyCredentials } from "./providers";
+import { accountDetails } from "../accounts";
 
 function publicBrand(brand: Brand): Brand {
-  return { ...brand, domain: "", shopify: { status: brand.shopify.status }, whop: { status: brand.whop.status }, products: brand.products.map(({ variantId: _variantId, ...product }) => product) };
+  const { accountDetails: _accountDetails, ...publicFields } = brand;
+  return { ...publicFields, domain: "", shopify: { status: brand.shopify.status }, whop: { status: brand.whop.status }, products: brand.products.map(({ variantId: _variantId, ...product }) => product) };
 }
 
 export async function handleApi(request: Request): Promise<Response> {
@@ -62,6 +64,10 @@ export async function handleApi(request: Request): Promise<Response> {
       return json(db.transaction(() => {
         const brand = db.brand(brandId);
         db.setCredential(brandId, input.provider, input);
+        brand.accountDetails = {
+          ...accountDetails(brand),
+          ...(input.provider === "shopify" ? { shopifyDomain: account } : { whopCompanyId: account }),
+        };
         brand[input.provider] = { status: "verified", account, checkedAt: new Date().toISOString() };
         if (input.provider === "shopify") {
           // Reconnecting a different catalog invalidates published product references.
