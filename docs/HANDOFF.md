@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-10. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+**Latest hosting checkpoint — owner report, 23:45 UTC:** Netlify account setup and Git repository access are connected. A Netlify project URL, selected deployment branch, build result and runtime settings have not yet been verified. Guide import of `realecomgirl/build` using `hoplite/beroia-65b17429` (the branch with the Supabase work), then stop at deployment configuration to check settings and private environment variables before publishing. If already deployed, request only the public site URL and inspect live behavior; do not repeat account setup or assume repository authorization means the app is deployed. Secrets saved in Hoplite do not automatically transfer to Netlify.
+
 **CURRENT — Supabase connected and initialized, after the owner's 23:41 UTC update:** the owner reset the database password and updated `DATABASE_URL` privately. `npm run db:check` now passes authentication and certificate/hostname verification. Applied `npm run db:migrate` successfully and verified the real cloud schema through the application Store. Six private tables exist with RLS enabled; both `anon` and `authenticated` roles are denied direct access. Brands, orders, activity, credentials and idempotency tables are empty. No existing records were imported or deleted. Next: prepare Netlify Free, configure its server-only settings and exact HTTPS `APP_URL`, then verify owner sign-in. Netlify is **not deployed** and `APP_URL` remains intentionally unset.
 
 ### Latest setup verification
