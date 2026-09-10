@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Activity, Brand, Order } from "../types";
 import { HttpError, encrypt, decrypt } from "./security";
 import { brandInput, brandPatch, checkoutInput, testProductInput } from "./validation";
+import { checkoutTotals } from "../checkout";
 
 const id = (prefix: string) => `${prefix}_${randomUUID()}`;
 const now = () => new Date().toISOString();
@@ -66,6 +67,8 @@ export class Store {
     const data = brandPatch.parse(input);
     return this.transaction(() => {
       const brand = this.brand(brandId);
+      const bumpId = data.checkoutExperience?.bumpProductId;
+      if (bumpId && !brand.products.some(product => product.id === bumpId && product.available)) throw new HttpError(422, "Choose an available product from this brand for the order bump.");
       return this.saveBrand({ ...brand, ...data, logoInitial: (data.name ?? brand.name).charAt(0).toUpperCase() });
     });
   }
@@ -119,13 +122,14 @@ export class Store {
         if (!product || !product.available) throw new HttpError(409, "A product is unavailable. Refresh your checkout.");
         return { title: product.title, quantity: item.quantity, price: product.price };
       });
-      const subtotal = items.reduce((sum, item) => sum + Math.round(item.price * 100) * item.quantity, 0);
-      const shipping = subtotal >= Math.round(brand.freeShippingThreshold * 100) ? 0 : Math.round(brand.shippingPrice * 100);
-      const total = (subtotal + shipping) / 100;
-      const order: Order = { id: id("demo"), brandId: brand.id, customer: `${data.customer.firstName} ${data.customer.lastName}`, email: data.customer.email, total, currency: "USD", status: "paid", syncStatus: "demo", mode: "demo", items, createdAt: now() };
+      let breakdown;
+      try { breakdown = checkoutTotals(brand, items, data.options); }
+      catch (error) { throw new HttpError(422, error instanceof Error ? error.message : "Invalid checkout options."); }
+      const total = breakdown.total;
+      const order: Order = { id: id("demo"), brandId: brand.id, customer: `${data.customer.firstName} ${data.customer.lastName}`, email: data.customer.email, total, currency: "USD", status: "paid", syncStatus: "demo", mode: "demo", items, breakdown, createdAt: now() };
       this.db.prepare("INSERT INTO orders VALUES (?, ?, ?)").run(order.id, brand.id, JSON.stringify(order));
       this.addActivity(`Demo order placed for ${brand.name} — no payment collected`, "order", brand.id);
-      const result = { orderId: order.id, mode: "demo" as const, total };
+      const result = { orderId: order.id, mode: "demo" as const, total, breakdown };
       if (scopedKey) this.db.prepare("INSERT INTO idempotency VALUES (?, ?, ?)").run(scopedKey, fingerprint, JSON.stringify(result));
       return result;
     });
@@ -152,4 +156,9 @@ export class Store {
 }
 
 const globalStore = globalThis as typeof globalThis & { limitlessStore?: Store };
-export function store() { return globalStore.limitlessStore ??= new Store(); }
+export function store() {
+  const instance = globalStore.limitlessStore ??= new Store();
+  // Keep the open SQLite connection, but refresh methods after a development hot reload.
+  if (process.env.NODE_ENV !== "production" && Object.getPrototypeOf(instance) !== Store.prototype) Object.setPrototypeOf(instance, Store.prototype);
+  return instance;
+}

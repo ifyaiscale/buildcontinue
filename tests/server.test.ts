@@ -211,6 +211,18 @@ test("Shopify imports each variant with availability and no unsafe image URL", a
   } finally { globalThis.fetch = original; }
 });
 
+test("development uses the actual Host while production still requires its configured origin", () => {
+  environment({ NODE_ENV: "development", APP_URL: undefined }, () => {
+    const normalized = (origin: string) => new Request("http://0.0.0.0:3000/api/brands", { method: "POST", headers: { host: "localhost:3000", origin, "Content-Type": "application/json" }, body: "{}" });
+    assert.doesNotThrow(() => checkOrigin(normalized("http://localhost:3000")));
+    assert.throws(() => checkOrigin(normalized("https://evil.example")), /origin must match/);
+  });
+  environment({ NODE_ENV: "production", APP_URL: "https://checkout.example" }, () => {
+    const forged = new Request("http://0.0.0.0:3000/api/brands", { method: "POST", headers: { host: "evil.example", origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
+    assert.throws(() => checkOrigin(forged), /origin must match/);
+  });
+});
+
 test("production APIs protect admin state and public drafts, sanitize account identities", async () => {
   const old = { NODE_ENV: process.env.NODE_ENV, ADMIN_PASSWORD: process.env.ADMIN_PASSWORD, ADMIN_PASSWORD_HASH: process.env.ADMIN_PASSWORD_HASH, SESSION_SECRET: process.env.SESSION_SECRET };
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };

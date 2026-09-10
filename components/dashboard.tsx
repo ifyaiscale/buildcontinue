@@ -47,6 +47,8 @@ import {
 } from "lucide-react";
 import type { AppState, Brand, Order } from "@/lib/types";
 import { CheckoutPreview } from "@/components/checkout";
+import { CheckoutSettings } from "@/components/checkout-settings";
+import { checkoutExperience } from "@/lib/checkout";
 import "@/app/checkout.css";
 
 type View =
@@ -962,6 +964,12 @@ export function Dashboard() {
                 </div>
               ))}
             </div>
+            {orderDetail.breakdown && <div className="order-breakdown">
+              <div className="detail-row"><span>Discount</span><strong>−{money(orderDetail.breakdown.discount)}</strong></div>
+              <div className="detail-row"><span>Shipping</span><strong>{money(orderDetail.breakdown.shipping)}</strong></div>
+              {orderDetail.breakdown.priority > 0 && <div className="detail-row"><span>Priority processing</span><strong>{money(orderDetail.breakdown.priority)}</strong></div>}
+              {orderDetail.breakdown.tip > 0 && <div className="detail-row"><span>Tip</span><strong>{money(orderDetail.breakdown.tip)}</strong></div>}
+            </div>}
             <div className="detail-row order-total">
               <span>Total</span>
               <strong>{money(orderDetail.total)}</strong>
@@ -1288,6 +1296,7 @@ function Studio({
         supportEmail: draft.supportEmail,
         shippingPrice: draft.shippingPrice,
         freeShippingThreshold: draft.freeShippingThreshold,
+        checkoutExperience: checkoutExperience(draft),
       });
       await onSaved("Checkout changes saved.");
     } catch (err) {
@@ -1425,6 +1434,11 @@ function Studio({
             the test checkout.
           </p>
         </div>
+        <CheckoutSettings
+          brand={draft}
+          value={checkoutExperience(draft)}
+          onChange={experience => setDraft(current => ({ ...current, checkoutExperience: experience }))}
+        />
         {error && (
           <div className="inline-error" role="alert">
             {error}

@@ -14,6 +14,19 @@ A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, 
 
 ## Important: not a live payment processor
 
+### Conversion-focused checkout design
+
+The checkout uses a Shopify-style contact/delivery/payment layout with a compact order summary, per-brand colors, and optional conversion blocks. In **Checkout studio**, expand the settings below shipping and save to publish the content changes for that brand:
+
+- **Trust & payment presentation:** demo-labeled wallet/card-method examples, checkout reassurance, merchant-written delivery/returns text, and expandable FAQs. Payment examples do not enable or promise any payment method.
+- **Customer review:** configurable quote, author, and 1–5 stars. Unconfirmed content is labeled as a sample; merchant confirmation is not purchase verification. Editing the quote, author, or rating clears confirmation in the editor. No invented customer counts, aggregate ratings, or “verified buyer” badge are added.
+- **Offers & order value:** one percentage discount code, an available catalog product as an optional order bump, optional priority processing, and optional tips. Nothing is preselected. Subscriptions and recurring billing remain unsupported.
+- **Time-limited offer:** a fixed discount deadline tied to the configured code. The countdown never restarts on refresh. The server rejects the expired code; base product prices do not change.
+
+The demo checkout request accepts optional `options: {discountCode, tipPercent, priority}`. Tip percentages are limited to 0, 5, 10, or 15. Bump products are ordinary validated cart line items, not client-supplied prices. The server computes everything in integer cents; discounts apply to merchandise, and both free-shipping eligibility and tips use the discounted merchandise subtotal. Shipping and priority fees are excluded from tips. The response and saved order include an itemized `breakdown` with subtotal, discount, shipping, priority, tip, and total. Retry idempotency includes the selected options.
+
+These are familiar design patterns, not evidence of increased conversion. Review actual customer behavior and run controlled experiments before making performance claims.
+
 `environment.liveEnabled` is always `false`. Every live-publish attempt is rejected with an actionable explanation. No card fields, payment capture, offsite-payment bypass, Shopify order writes, or payment webhooks are implemented. Do not route real shoppers here yet. There is no switch that turns an incomplete integration into live payments.
 
 Same-day **demo setup and account verification** are possible if you have the required credentials. Same-day production launch is **not guaranteed** and depends on implementation, provider approvals, Shopify/Whop terms, your products, and your accounts.

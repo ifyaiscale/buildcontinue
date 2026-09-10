@@ -16,6 +16,43 @@ export type Product = {
   available: boolean;
 };
 
+export type CheckoutExperience = {
+  showPaymentMethods: boolean;
+  showTrustBadges: boolean;
+  showReview: boolean;
+  reviewQuote: string;
+  reviewAuthor: string;
+  reviewRating: number;
+  reviewConfirmed: boolean;
+  deliveryText: string;
+  returnsText: string;
+  showFaq: boolean;
+  discountCode: string;
+  discountPercent: number;
+  allowTips: boolean;
+  priorityEnabled: boolean;
+  priorityLabel: string;
+  priorityPrice: number;
+  bumpProductId: string;
+  offerEndsAt: string;
+  offerText: string;
+};
+
+export type CheckoutOptions = {
+  discountCode?: string;
+  tipPercent?: 0 | 5 | 10 | 15;
+  priority?: boolean;
+};
+
+export type OrderBreakdown = {
+  subtotal: number;
+  discount: number;
+  shipping: number;
+  priority: number;
+  tip: number;
+  total: number;
+};
+
 export type Brand = {
   id: string;
   name: string;
@@ -35,6 +72,7 @@ export type Brand = {
   whop: Connection;
   products: Product[];
   createdAt: string;
+  checkoutExperience?: CheckoutExperience;
 };
 
 export type Order = {
@@ -48,6 +86,7 @@ export type Order = {
   syncStatus: "synced" | "pending" | "failed" | "demo";
   mode: "demo" | "live";
   items: { title: string; quantity: number; price: number }[];
+  breakdown?: OrderBreakdown;
   createdAt: string;
 };
 

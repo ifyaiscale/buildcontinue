@@ -61,7 +61,10 @@ export function requireCredentials(request: Request) {
   if (!encryptionConfigured()) throw new HttpError(503, "Set a 32-byte CREDENTIAL_ENCRYPTION_KEY before connecting accounts.");
 }
 export function checkOrigin(request: Request) {
-  let expected = process.env.APP_URL || (process.env.NODE_ENV !== "production" ? new URL(request.url).origin : "");
+  const requestUrl = new URL(request.url);
+  // Next dev normalizes request.url to its bind address; Host preserves the browser-facing origin.
+  const localOrigin = request.headers.get("host") ? `${requestUrl.protocol}//${request.headers.get("host")}` : requestUrl.origin;
+  let expected = process.env.APP_URL || (process.env.NODE_ENV !== "production" ? localOrigin : "");
   try {
     const url = new URL(expected);
     if (url.origin !== expected || !["http:", "https:"].includes(url.protocol) || (process.env.NODE_ENV === "production" && url.protocol !== "https:")) expected = "";
