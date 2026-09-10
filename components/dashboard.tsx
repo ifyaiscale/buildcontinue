@@ -1038,8 +1038,8 @@ function RevenueChart({ orders, days }: { orders: Order[]; days: number }) {
       >
         <defs>
           <linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#c4dfba" stopOpacity=".65" />
-            <stop offset="100%" stopColor="#e9f2e2" stopOpacity=".05" />
+            <stop offset="0%" stopColor="var(--accent-muted)" stopOpacity=".65" />
+            <stop offset="100%" stopColor="var(--accent-soft)" stopOpacity=".05" />
           </linearGradient>
         </defs>
         {[0, 0.5, 1].map((fraction) => (
@@ -1049,10 +1049,10 @@ function RevenueChart({ orders, days }: { orders: Order[]; days: number }) {
               x2="708"
               y1={174 - fraction * 140}
               y2={174 - fraction * 140}
-              stroke="#e9eae5"
+              stroke="var(--line)"
               strokeDasharray="4 5"
             />
-            <text x="0" y={178 - fraction * 140} fill="#92958b" fontSize="10">
+            <text x="0" y={178 - fraction * 140} fill="var(--muted)" fontSize="10">
               ${Math.round(max * fraction)}
             </text>
           </g>
@@ -1060,7 +1060,7 @@ function RevenueChart({ orders, days }: { orders: Order[]; days: number }) {
         <path d={`${path} L 706,174 L 56,174 Z`} fill="url(#chart-fill)" />
         <path
           d={path}
-          stroke="#64894e"
+          stroke="var(--accent)"
           strokeWidth="2.5"
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -1072,7 +1072,7 @@ function RevenueChart({ orders, days }: { orders: Order[]; days: number }) {
             cx={56 + (i * 650) / (bucketCount - 1)}
             cy={174 - (value / max) * 140}
             r="3"
-            fill="#64894e"
+            fill="var(--accent)"
           >
             <title>{money(value)}</title>
           </circle>
@@ -1083,7 +1083,7 @@ function RevenueChart({ orders, days }: { orders: Order[]; days: number }) {
             x={56 + (i * 650) / 4}
             y="207"
             textAnchor={i === 0 ? "start" : i === 4 ? "end" : "middle"}
-            fill="#92958b"
+            fill="var(--muted)"
             fontSize="10"
           >
             {shortDate(new Date(Date.now() - date * 86400000).toISOString())}
@@ -1209,6 +1209,7 @@ function BrandCard({
           target="_blank"
           rel="noreferrer"
           aria-label={`Preview ${brand.name} checkout`}
+          title="Open full checkout example"
         >
           <ArrowUpRight size={17} />
         </a>
