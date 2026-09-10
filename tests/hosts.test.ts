@@ -98,6 +98,7 @@ test("mapped checkout APIs cannot read drafts or admin data even with a valid ad
     const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
     const previousStore = globals.limitlessStore;
     const db = new Store(":memory:");
+    await db.ready;
     globals.limitlessStore = db;
     const handler = route(handleApi);
     const cookie = sessionCookie();
@@ -105,7 +106,7 @@ test("mapped checkout APIs cannot read drafts or admin data even with a valid ad
       assert.equal((await handler(request(first, "/api/checkout/aure-studio", { headers: { cookie } }))).status, 404);
       assert.equal((await handler(request(admin, "/api/checkout/aure-studio", { headers: { cookie } }))).status, 200);
       for (const path of ["/api/state", "/api/auth/status", "/api/checkout/form-and-field"]) assert.equal((await handler(request(first, path, { headers: { cookie } }))).status, 404);
-      db.publish("brand_1", "demo");
+      await db.publish("brand_1", "demo");
       assert.equal((await handler(request())).status, 200);
       const payload = { mode: "demo", items: [{ productId: "product_1", quantity: 1 }], customer: { email: "test@example.com", firstName: "Test", lastName: "Buyer", address: "1 Example Street", city: "Portland", postalCode: "97201", country: "US" } };
       const response = await handler(request(first, "/api/checkout/aure-studio", { method: "POST", headers: { origin: first, "content-type": "application/json" }, body: JSON.stringify(payload) }));

@@ -1,6 +1,6 @@
 # Limitless Checkout
 
-A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, TypeScript, and SQLite. Designed for organizing your Shopify stores and Whop companies in one place, with a branded checkout preview for each brand.
+A single-owner, multi-brand checkout workspace built with Next.js 16, React 19, TypeScript, and SQLite or Supabase PostgreSQL. Designed for organizing your Shopify stores and Whop companies in one place, with a branded checkout preview for each brand.
 
 > **Current status: working management app and demo checkout, not live payment processing.** Publishing this code does not deploy the app, transfer private workspace data, or connect provider accounts.
 
@@ -34,7 +34,7 @@ Storefront domains (for example `store.example`) are separate from the `.myshopi
 
 Saving identifiers leaves provider connections unverified and live checkout disabled. The protected connection form prefills these saved IDs and verifies the provider before storing encrypted credentials. Successful verification updates the saved account mapping. Changing an already verified account requires verifying the replacement through Connections; a metadata edit cannot relabel an existing credential as belonging to another account. Failed verification preserves the previous verified connection.
 
-Saved account details are administrator workspace data and are omitted from public checkout responses. Actual merchant records stay in the private SQLite data directory, not in source code or seed fixtures. Moving the app to another deployment requires a secure migration of that database; publishing code alone does not transfer workspace records.
+Saved account details are administrator workspace data and are omitted from public checkout responses. Actual merchant records stay in the private database, not in source code or seed fixtures. Moving existing SQLite records to Supabase requires a separate secure migration; publishing code alone does not transfer workspace records.
 
 ### Conversion-focused checkout design
 
@@ -73,12 +73,12 @@ npm run build
 
 ## Secure deployment
 
-This MVP is a **single-owner application**, not a multi-tenant SaaS. Deploy one Node.js server on HTTPS with a persistent private volume. Set `NODE_ENV=production`, `APP_URL` to the exact external origin (no path), and these secrets through your hosting secret manager:
+This MVP is a **single-owner application**, not a multi-tenant SaaS. For SQLite, deploy one Node.js server on HTTPS with a persistent private volume. For managed PostgreSQL, follow [Supabase setup](docs/SUPABASE_SETUP.md); Netlify requires this external storage rather than a local database. Set `NODE_ENV=production`, `APP_URL` to the exact external origin (no path), and these secrets through your hosting secret manager:
 
 1. `ADMIN_PASSWORD_HASH` (preferred) or a randomly generated `ADMIN_PASSWORD` of at least 16 characters.
 2. `SESSION_SECRET`, independently generated, at least 32 characters.
 3. `CREDENTIAL_ENCRYPTION_KEY`, exactly 64 hexadecimal characters (32 random bytes), before provider connections.
-4. `DATABASE_PATH`, the private persistent SQLite path (default `data/limitless.sqlite`).
+4. Either `DATABASE_URL`, a private Supabase transaction-pooler URI, or `DATABASE_PATH`, a private persistent SQLite path (default `data/limitless.sqlite`). PostgreSQL requires `npm run db:migrate` before first use; it starts empty and never automatically imports local data. An invalid PostgreSQL connection never falls back to SQLite.
 
 Generate a password hash locally, passing the password through an interactive prompt rather than putting it in shell history:
 

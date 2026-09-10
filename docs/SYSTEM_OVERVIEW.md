@@ -25,7 +25,7 @@ In production, management requires administrator authentication. In an unconfigu
 | Component | Implementation | Responsibility |
 | --- | --- | --- |
 | Web application | Next.js 16, React 19, TypeScript; Node.js 24 | Dashboard, checkout, server API routes |
-| Persistence | SQLite through `node:sqlite`, WAL mode | Brand records, products, orders, activity, encrypted credentials, demo-order idempotency |
+| Persistence | SQLite through `node:sqlite` (local WAL) or Supabase PostgreSQL through `pg` | Brand records, products, orders, activity, encrypted credentials, demo-order idempotency |
 | Validation | Zod schemas | Accept only bounded, supported fields; reject client-supplied prices and status injection |
 | Authentication | Password/hash and signed HttpOnly session cookie | Restrict owner operations outside demo mode |
 | Credential storage | AES-256-GCM | Encrypt provider credentials with brand/provider context |
@@ -41,7 +41,9 @@ In production, management requires administrator authentication. In an unconfigu
 - `components/checkout.tsx`, `app/checkout.css`: shared preview blocks and customer-facing demo checkout.
 - `lib/accounts.ts`, `lib/checkout.ts`, `lib/types.ts`: defaults, shared pricing calculations, and data contracts.
 - `lib/server/api.ts`: route orchestration, access checks, and public-data sanitization.
-- `lib/server/store.ts`: SQLite persistence and transactional demo ordering.
+- `lib/server/store.ts`: Shared asynchronous persistence and transactional demo ordering.
+- `lib/server/database.ts`: SQLite and PostgreSQL adapters, transaction isolation and verified TLS.
+- `migrations/001_supabase.sql`: Private, initially empty Supabase schema. See [setup](SUPABASE_SETUP.md).
 - `lib/server/providers.ts`: Shopify/Whop API adapters.
 - `lib/server/security.ts`, `validation.ts`, `http.ts`: authentication, encryption, origin validation, limits, and errors.
 - `lib/server/hosts.ts`, `page-site.ts`: explicit checkout-origin mappings, per-host request checks, and server-side page routing.
@@ -130,7 +132,7 @@ Application routing now supports explicit `CHECKOUT_ORIGINS` mappings from an ex
 
 Whop may serve its payment component, but Limitless still needs a running application/backend for the custom page, secret-bearing provider requests, and payment events. The development Preview and a GitHub repository are not production hosting.
 
-For the current SQLite architecture, a paid single-instance web service with a persistent disk is a practical initial private deployment. Do not place this database on ephemeral storage or scale to independent replicas. Before handling real orders, implement consistent database backups, test restoration, add monitoring and trusted edge rate limiting, and evaluate availability requirements. Durable webhook processing and/or migration to a managed database may be needed as the live design is finalized.
+For SQLite, a single-instance web service with a persistent disk is required; never use ephemeral storage or independent replicas. Supabase PostgreSQL is now an alternative for shared durable storage, including the planned Netlify deployment; see [Supabase setup](SUPABASE_SETUP.md). Before handling real orders, implement consistent database backups, test restoration, add monitoring and trusted edge/distributed rate limiting, and evaluate availability requirements. Durable webhook processing is still needed as the live design is finalized.
 
 ## Data and publication boundaries
 

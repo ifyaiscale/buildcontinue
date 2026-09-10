@@ -15,93 +15,161 @@ const customer = { email: "test@example.com", firstName: "Demo", lastName: "Buye
 const order = { mode: "demo", items: [{ productId: "product_1", quantity: 1 }], customer };
 const request = (path = "/api/state", options: RequestInit = {}) => new Request(`http://localhost:3000${path}`, options);
 
-function environment(values: Record<string, string | undefined>, fn: () => void) {
+async function environment(values: Record<string, string | undefined>, fn: () => void | Promise<void>) {
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
   for (const [k, v] of Object.entries(values)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-  try { fn(); } finally { for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  try { await fn(); } finally { for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
 }
 
-test("seed is accurate, synthetic, and durable across database reopen", () => {
+test("seed is accurate, synthetic, and durable across database reopen", async () => {
   const dir = mkdtempSync(join(tmpdir(), "limitless-")); const path = join(dir, "test.sqlite");
   try {
     let db = new Store(path);
-    assert.deepEqual(db.brands().map(b => b.slug), ["aure-studio", "form-and-field", "everyday-supply"]);
-    assert.equal(db.orders().length, 8);
-    for (const brand of db.brands()) { assert.equal(brand.mode, "demo"); assert.equal(brand.status, "draft"); assert.equal(brand.shopify.status, "not_connected"); assert.equal(brand.whop.status, "not_connected"); }
-    for (const item of db.orders()) { assert.equal(item.mode, "demo"); assert.equal(item.syncStatus, "demo"); assert.match(item.email, /@example.com$/); }
-    const brand = db.createBrand({ name: "My Brand", category: "Home", domain: "brand.example", accent: "#123456" });
-    db.updateBrand(brand.id, { announcement: "Saved persistently" }); db.db.close();
+    await db.ready;
+    assert.deepEqual((await db.brands()).map(b => b.slug), ["aure-studio", "form-and-field", "everyday-supply"]);
+    assert.equal((await db.orders()).length, 8);
+    for (const brand of await db.brands()) { assert.equal(brand.mode, "demo"); assert.equal(brand.status, "draft"); assert.equal(brand.shopify.status, "not_connected"); assert.equal(brand.whop.status, "not_connected"); }
+    for (const item of await db.orders()) { assert.equal(item.mode, "demo"); assert.equal(item.syncStatus, "demo"); assert.match(item.email, /@example.com$/); }
+    const brand = await db.createBrand({ name: "My Brand", category: "Home", domain: "brand.example", accent: "#123456" });
+    await db.updateBrand(brand.id, { announcement: "Saved persistently" }); db.db.close();
     db = new Store(path);
-    assert.equal(db.brands().length, 4); assert.equal(db.orders().length, 8);
-    assert.equal(db.brand(brand.id).announcement, "Saved persistently"); db.db.close();
+    await db.ready;
+    assert.equal((await db.brands()).length, 4); assert.equal((await db.orders()).length, 8);
+    assert.equal((await db.brand(brand.id)).announcement, "Saved persistently"); db.db.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("brand validation blocks mass assignment and creates stable unique slugs", () => {
+test("brand validation blocks mass assignment and creates stable unique slugs", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
-    assert.throws(() => db.createBrand({ name: "", category: "Home" }));
-    assert.throws(() => db.createBrand({ name: "Bad", category: "Home", domain: "https://example.com/path" }));
-    assert.throws(() => db.updateBrand("brand_1", { status: "live", products: [] }));
-    assert.throws(() => db.updateBrand("brand_1", { shippingPrice: 1.001 }));
-    assert.throws(() => db.updateBrand("brand_1", { accent: "red;background:url(evil)" }));
-    assert.throws(() => db.updateBrand("brand_1", {}));
-    db.updateBrand("brand_1", { announcement: "Updated" });
-    assert.equal(db.brand("brand_1").accent, "#3c5143");
-    const first = db.createBrand({ name: "Auré Studio", category: "Skincare" });
-    const second = db.createBrand({ name: "Auré Studio", category: "Skincare" });
+    await assert.rejects(async () => await db.createBrand({ name: "", category: "Home" }));
+    await assert.rejects(async () => await db.createBrand({ name: "Bad", category: "Home", domain: "https://example.com/path" }));
+    await assert.rejects(async () => await db.updateBrand("brand_1", { status: "live", products: [] }));
+    await assert.rejects(async () => await db.updateBrand("brand_1", { shippingPrice: 1.001 }));
+    await assert.rejects(async () => await db.updateBrand("brand_1", { accent: "red;background:url(evil)" }));
+    await assert.rejects(async () => await db.updateBrand("brand_1", {}));
+    await db.updateBrand("brand_1", { announcement: "Updated" });
+    assert.equal((await db.brand("brand_1")).accent, "#3c5143");
+    const first = await db.createBrand({ name: "Auré Studio", category: "Skincare" });
+    const second = await db.createBrand({ name: "Auré Studio", category: "Skincare" });
     assert.equal(first.slug, "aure-studio-2"); assert.equal(second.slug, "aure-studio-3");
     assert.equal(first.status, "draft"); assert.equal(first.mode, "demo");
-    assert.throws(() => db.publish(first.id, "demo"), /available product/);
-    assert.throws(() => db.publish("brand_1", "live"), /Live checkout is not enabled/);
+    await assert.rejects(async () => await db.publish(first.id, "demo"), /available product/);
+    await assert.rejects(async () => await db.publish("brand_1", "live"), /Live checkout is not enabled/);
   } finally { db.db.close(); }
 });
 
-test("checkout computes price and shipping in cents, persists orders, and handles replay atomically", () => {
+test("checkout computes price and shipping in cents, persists orders, and handles replay atomically", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
-    assert.throws(() => db.checkout("aure-studio", order, false), /not published/);
-    db.publish("brand_1", "demo");
-    const result = db.checkout("aure-studio", order, false, "test-key-one");
+    await assert.rejects(async () => await db.checkout("aure-studio", order, false), /not published/);
+    await db.publish("brand_1", "demo");
+    const result = await db.checkout("aure-studio", order, false, "test-key-one");
     assert.equal(result.total, 53); assert.equal(result.mode, "demo");
-    assert.equal(db.orders().length, 9);
-    assert.deepEqual(db.checkout("aure-studio", order, false, "test-key-one"), result);
-    assert.equal(db.orders().length, 9);
-    assert.throws(() => db.checkout("aure-studio", { ...order, customer: { ...customer, firstName: "Other" } }, false, "test-key-one"), /different order/);
-    assert.equal(db.checkout("aure-studio", { ...order, items: [{ productId: "product_1", quantity: 2 }] }, false).total, 96);
-    const brand = db.brand("brand_1"); brand.products[0].price = 0.1; db.saveBrand(brand);
-    db.updateBrand(brand.id, { shippingPrice: 0.2, freeShippingThreshold: 100 });
-    assert.equal(db.checkout(brand.slug, { ...order, items: [{ productId: "product_1", quantity: 3 }] }, false).total, 0.5);
+    assert.equal((await db.orders()).length, 9);
+    assert.deepEqual(await db.checkout("aure-studio", order, false, "test-key-one"), result);
+    assert.equal((await db.orders()).length, 9);
+    await assert.rejects(async () => await db.checkout("aure-studio", { ...order, customer: { ...customer, firstName: "Other" } }, false, "test-key-one"), /different order/);
+    assert.equal((await db.checkout("aure-studio", { ...order, items: [{ productId: "product_1", quantity: 2 }] }, false)).total, 96);
+    const brand = await db.brand("brand_1"); brand.products[0].price = 0.1; await db.saveBrand(brand);
+    await db.updateBrand(brand.id, { shippingPrice: 0.2, freeShippingThreshold: 100 });
+    assert.equal((await db.checkout(brand.slug, { ...order, items: [{ productId: "product_1", quantity: 3 }] }, false)).total, 0.5);
     const fingerprint = db.db.prepare("SELECT fingerprint FROM idempotency").get()!.fingerprint as string;
     assert.match(fingerprint, /^[a-f0-9]{64}$/);
   } finally { db.db.close(); }
 });
 
-test("checkout rejects malformed, duplicate, unavailable, and client-priced orders", () => {
+test("checkout rejects malformed, duplicate, unavailable, and client-priced orders", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
     for (const items of [[], [{ productId: "product_1", quantity: 0 }], [{ productId: "product_1", quantity: -2 }], [{ productId: "product_1", quantity: 1.5 }], [{ productId: "product_1", quantity: 21 }], [{ productId: "missing", quantity: 1 }], [{ productId: "product_1", quantity: 1, price: 0 }], [{ productId: "product_1", quantity: 1 }, { productId: "product_1", quantity: 2 }]]) {
-      assert.throws(() => db.checkout("aure-studio", { ...order, items }, true));
+      await assert.rejects(async () => await db.checkout("aure-studio", { ...order, items }, true));
     }
-    assert.throws(() => db.checkout("aure-studio", { ...order, total: 0 }, true));
-    assert.throws(() => db.checkout("aure-studio", { ...order, mode: "live" }, true));
-    assert.throws(() => db.checkout("aure-studio", { ...order, customer: { ...customer, email: "invalid" } }, true));
-    const brand = db.brand("brand_1"); brand.products[0].available = false; db.saveBrand(brand);
-    assert.throws(() => db.checkout("aure-studio", order, true), /unavailable/);
-    assert.equal(db.orders().length, 8);
+    await assert.rejects(async () => await db.checkout("aure-studio", { ...order, total: 0 }, true));
+    await assert.rejects(async () => await db.checkout("aure-studio", { ...order, mode: "live" }, true));
+    await assert.rejects(async () => await db.checkout("aure-studio", { ...order, customer: { ...customer, email: "invalid" } }, true));
+    const brand = await db.brand("brand_1"); brand.products[0].available = false; await db.saveBrand(brand);
+    await assert.rejects(async () => await db.checkout("aure-studio", order, true), /unavailable/);
+    assert.equal((await db.orders()).length, 8);
   } finally { db.db.close(); }
 });
 
-test("auth fails closed in production and public demo cannot submit credentials", () => {
-  environment({ NODE_ENV: "development", ADMIN_PASSWORD: undefined, ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: undefined }, () => {
+test("SQLite retains both concurrent catalog updates and their activity", async () => {
+  const db = new Store(":memory:");
+  await db.ready;
+  try {
+    const original = await db.brand("brand_1");
+    const activityBefore = await db.activity();
+    await Promise.all([
+      db.addTestProduct(original.id, { title: "Concurrent candle", price: 12 }),
+      db.addTestProduct(original.id, { title: "Concurrent pouch", price: 15 }),
+    ]);
+    const saved = await db.brand(original.id);
+    assert.deepEqual(saved.products.slice(0, original.products.length), original.products);
+    assert.deepEqual(saved.products.slice(original.products.length).map(product => product.title).sort(), ["Concurrent candle", "Concurrent pouch"]);
+    assert.equal(new Set(saved.products.map(product => product.id)).size, original.products.length + 2);
+    const addedActivity = (await db.activity()).filter(item => !activityBefore.some(previous => previous.id === item.id));
+    assert.equal(addedActivity.length, 2);
+    assert.equal(addedActivity.every(item => item.brandId === original.id && item.type === "brand"), true);
+  } finally { db.db.close(); }
+});
+
+test("SQLite concurrent idempotent checkouts create only one order and activity", async () => {
+  const db = new Store(":memory:");
+  await db.ready;
+  try {
+    await db.publish("brand_1", "demo");
+    const ordersBefore = await db.orders();
+    const activityBefore = await db.activity();
+    const [first, second] = await Promise.all([
+      db.checkout("aure-studio", order, false, "concurrent-checkout"),
+      db.checkout("aure-studio", order, false, "concurrent-checkout"),
+    ]);
+    assert.deepEqual(first, second);
+    assert.equal(first.total, 53);
+    const savedOrders = await db.orders();
+    assert.equal(savedOrders.length, ordersBefore.length + 1);
+    assert.equal(savedOrders.filter(item => item.id === first.orderId).length, 1);
+    assert.equal((await db.activity()).length, activityBefore.length + 1);
+    assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM idempotency").get()?.n, 1);
+  } finally { db.db.close(); }
+});
+
+test("SQLite rolls back async transaction writes and accepts subsequent transactions", async () => {
+  const db = new Store(":memory:");
+  await db.ready;
+  try {
+    const original = await db.brand("brand_1");
+    const activityBefore = await db.activity();
+    const failure = new Error("Synthetic transaction failure");
+    await assert.rejects(db.transaction(async () => {
+      await db.saveBrand({ ...original, announcement: "Must be rolled back" });
+      await db.addActivity("Must be rolled back", "brand", original.id);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal((await db.brand(original.id)).announcement, "Must be rolled back");
+      assert.equal((await db.activity()).length, activityBefore.length + 1);
+      throw failure;
+    }), error => error === failure);
+    assert.deepEqual(await db.brand(original.id), original);
+    assert.deepEqual(await db.activity(), activityBefore);
+    await db.updateBrand(original.id, { announcement: "Saved after rollback" });
+    assert.equal((await db.brand(original.id)).announcement, "Saved after rollback");
+  } finally { db.db.close(); }
+});
+
+test("auth fails closed in production and public demo cannot submit credentials", async () => {
+  await environment({ NODE_ENV: "development", ADMIN_PASSWORD: undefined, ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: undefined }, () => {
     assert.equal(demoMode(), true); assert.doesNotThrow(() => requireAdmin(request()));
     assert.throws(() => requireCredentials(request()), /disabled in the public demo/);
   });
-  environment({ NODE_ENV: "production", ADMIN_PASSWORD: undefined, ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: undefined }, () => {
+  await environment({ NODE_ENV: "production", ADMIN_PASSWORD: undefined, ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: undefined }, () => {
     assert.equal(demoMode(), false); assert.equal(authConfigured(), false);
     assert.throws(() => requireAdmin(request()), /not configured/);
   });
-  environment({ NODE_ENV: "production", ADMIN_PASSWORD: "strong-test-password-123!", ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: "s".repeat(48), CREDENTIAL_ENCRYPTION_KEY: "ab".repeat(32) }, () => {
+  await environment({ NODE_ENV: "production", ADMIN_PASSWORD: "strong-test-password-123!", ADMIN_PASSWORD_HASH: undefined, SESSION_SECRET: "s".repeat(48), CREDENTIAL_ENCRYPTION_KEY: "ab".repeat(32) }, () => {
     assert.equal(authConfigured(), true); assert.equal(demoMode(), false);
     assert.equal(verifyPassword("wrong"), false); assert.equal(verifyPassword("strong-test-password-123!"), true);
     assert.throws(() => requireAdmin(request()), /Sign in/);
@@ -113,8 +181,8 @@ test("auth fails closed in production and public demo cannot submit credentials"
   });
 });
 
-test("credentials are authenticated encrypted, contextual, and never stored in plaintext", () => {
-  environment({ CREDENTIAL_ENCRYPTION_KEY: "cd".repeat(32) }, () => {
+test("credentials are authenticated encrypted, contextual, and never stored in plaintext", async () => {
+  await environment({ CREDENTIAL_ENCRYPTION_KEY: "cd".repeat(32) }, async () => {
     const encrypted = encrypt("very-secret-token", "brand_1:shopify");
     assert.equal(decrypt(encrypted, "brand_1:shopify"), "very-secret-token");
     assert.notEqual(encrypted, encrypt("very-secret-token", "brand_1:shopify"));
@@ -122,19 +190,19 @@ test("credentials are authenticated encrypted, contextual, and never stored in p
     const parts = encrypted.split("."); parts[2] = Buffer.from("tampered").toString("base64url"); assert.throws(() => decrypt(parts.join("."), "brand_1:shopify"));
     const dir = mkdtempSync(join(tmpdir(), "limitless-secrets-")); const path = join(dir, "test.sqlite");
     try {
-      const db = new Store(path); db.setCredential("brand_1", "shopify", { accessToken: "very-secret-token" });
-      assert.deepEqual(db.credential("brand_1", "shopify"), { accessToken: "very-secret-token" });
-      assert.equal(JSON.stringify(db.brands()).includes("very-secret-token"), false);
+      const db = new Store(path); await db.ready; await db.setCredential("brand_1", "shopify", { accessToken: "very-secret-token" });
+      assert.deepEqual(await db.credential("brand_1", "shopify"), { accessToken: "very-secret-token" });
+      assert.equal(JSON.stringify(await db.brands()).includes("very-secret-token"), false);
       db.db.close(); assert.equal(readFileSync(path).includes(Buffer.from("very-secret-token")), false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
-test("password hashes take precedence, sessions expire, and partial auth never enables public demo", () => {
+test("password hashes take precedence, sessions expire, and partial auth never enables public demo", async () => {
   const salt = "ab".repeat(16);
   const password = "a-long-random-admin-password";
   const hash = `scrypt:${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
-  environment({ NODE_ENV: "development", ADMIN_PASSWORD_HASH: hash, ADMIN_PASSWORD: "different-long-password", SESSION_SECRET: "s".repeat(48), CREDENTIAL_ENCRYPTION_KEY: undefined }, () => {
+  await environment({ NODE_ENV: "development", ADMIN_PASSWORD_HASH: hash, ADMIN_PASSWORD: "different-long-password", SESSION_SECRET: "s".repeat(48), CREDENTIAL_ENCRYPTION_KEY: undefined }, () => {
     assert.equal(verifyPassword(password), true);
     assert.equal(verifyPassword("different-long-password"), false);
     const now = Date.now(); const cookie = sessionCookie(false, now);
@@ -143,7 +211,7 @@ test("password hashes take precedence, sessions expire, and partial auth never e
     assert.equal(authConfigured(), false); assert.equal(demoMode(), false);
     assert.equal(verifyPassword("different-long-password"), false);
   });
-  environment({ NODE_ENV: "development", ADMIN_PASSWORD_HASH: undefined, ADMIN_PASSWORD: undefined, SESSION_SECRET: "partial", CREDENTIAL_ENCRYPTION_KEY: undefined }, () => {
+  await environment({ NODE_ENV: "development", ADMIN_PASSWORD_HASH: undefined, ADMIN_PASSWORD: undefined, SESSION_SECRET: "partial", CREDENTIAL_ENCRYPTION_KEY: undefined }, () => {
     assert.equal(demoMode(), false); assert.throws(() => requireAdmin(request()), /not configured/);
   });
 });
@@ -155,20 +223,20 @@ test("rate limits reject exhausted buckets until expiry", () => {
   assert.doesNotThrow(() => rateLimit("test-bucket", 2, 1000, 1100));
 });
 
-test("production mutation origin configuration requires HTTPS and an exact origin", () => {
+test("production mutation origin configuration requires HTTPS and an exact origin", async () => {
   for (const origin of [undefined, "http://example.com", "https://example.com/path"]) {
-    environment({ NODE_ENV: "production", APP_URL: origin }, () => {
+    await environment({ NODE_ENV: "production", APP_URL: origin }, () => {
       assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { origin: "https://example.com", "content-type": "application/json" } })), /Configure APP_URL/);
     });
   }
-  environment({ NODE_ENV: "production", APP_URL: "https://example.com" }, () => {
+  await environment({ NODE_ENV: "production", APP_URL: "https://example.com" }, () => {
     checkOrigin(request("/api/brands", { method: "POST", headers: { host: "example.com", origin: "https://example.com", "content-type": "application/json; charset=utf-8" } }));
     assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { host: "example.com", origin: "https://example.com", "content-type": "application/json-fake" } })), /application\/json/);
   });
 });
 
 test("mutations enforce exact origin and JSON; request body is bounded", async () => {
-  environment({ NODE_ENV: "development", APP_URL: "http://localhost:3000" }, () => {
+  await environment({ NODE_ENV: "development", APP_URL: "http://localhost:3000" }, () => {
     assert.throws(() => checkOrigin(request("/api/brands", { method: "POST" })), /origin/);
     assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" } })), /origin/);
     assert.throws(() => checkOrigin(request("/api/brands", { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "text/plain" } })), /application\/json/);
@@ -211,13 +279,13 @@ test("Shopify imports each variant with availability and no unsafe image URL", a
   } finally { globalThis.fetch = original; }
 });
 
-test("development uses the actual Host while production still requires its configured origin", () => {
-  environment({ NODE_ENV: "development", APP_URL: undefined }, () => {
+test("development uses the actual Host while production still requires its configured origin", async () => {
+  await environment({ NODE_ENV: "development", APP_URL: undefined }, () => {
     const normalized = (origin: string) => new Request("http://0.0.0.0:3000/api/brands", { method: "POST", headers: { host: "localhost:3000", origin, "Content-Type": "application/json" }, body: "{}" });
     assert.doesNotThrow(() => checkOrigin(normalized("http://localhost:3000")));
     assert.throws(() => checkOrigin(normalized("https://evil.example")), /origin must match/);
   });
-  environment({ NODE_ENV: "production", APP_URL: "https://checkout.example" }, () => {
+  await environment({ NODE_ENV: "production", APP_URL: "https://checkout.example" }, () => {
     const forged = new Request("http://0.0.0.0:3000/api/brands", { method: "POST", headers: { host: "evil.example", origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
     assert.throws(() => checkOrigin(forged), /Site not configured/);
   });
@@ -226,15 +294,15 @@ test("development uses the actual Host while production still requires its confi
 test("production APIs protect admin state and public drafts, sanitize account identities", async () => {
   const old = { NODE_ENV: process.env.NODE_ENV, APP_URL: process.env.APP_URL, ADMIN_PASSWORD: process.env.ADMIN_PASSWORD, ADMIN_PASSWORD_HASH: process.env.ADMIN_PASSWORD_HASH, SESSION_SECRET: process.env.SESSION_SECRET };
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
-  const previousStore = globals.limitlessStore; const db = new Store(":memory:"); globals.limitlessStore = db;
+  const previousStore = globals.limitlessStore; const db = new Store(":memory:"); await db.ready; globals.limitlessStore = db;
   try {
     Object.assign(process.env, { NODE_ENV: "production", APP_URL: "https://dashboard.example", ADMIN_PASSWORD: "strong-password-test-123!", SESSION_SECRET: "s".repeat(48) }); delete process.env.ADMIN_PASSWORD_HASH;
     const handler = route(handleApi);
     const request = (path = "/api/state", options: RequestInit = {}) => new Request(`https://dashboard.example${path}`, options);
     assert.equal((await handler(request())).status, 401);
     assert.equal((await handler(request("/api/checkout/aure-studio"))).status, 404);
-    db.publish("brand_1", "demo");
-    const brand = db.brand("brand_1"); brand.shopify = { status: "verified", account: "private.myshopify.com", checkedAt: new Date().toISOString() }; db.saveBrand(brand);
+    await db.publish("brand_1", "demo");
+    const brand = await db.brand("brand_1"); brand.shopify = { status: "verified", account: "private.myshopify.com", checkedAt: new Date().toISOString() }; await db.saveBrand(brand);
     const response = await handler(request("/api/checkout/aure-studio"));
     assert.equal(response.status, 200); const publicData = await response.json();
     assert.equal(publicData.shopify.account, undefined); assert.equal(publicData.shopify.checkedAt, undefined);

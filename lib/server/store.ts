@@ -1,7 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { type Database, SqliteDatabase, PostgresDatabase, postgresConfig } from "./database";
 import type { Activity, Brand, Order } from "../types";
 import { HttpError, encrypt, decrypt } from "./security";
 import { brandInput, brandPatch, checkoutInput, testProductInput } from "./validation";
@@ -11,62 +11,60 @@ const id = (prefix: string) => `${prefix}_${randomUUID()}`;
 const now = () => new Date().toISOString();
 
 export class Store {
-  readonly db: DatabaseSync;
-  constructor(path = process.env.DATABASE_PATH ?? resolve("data/limitless.sqlite")) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
-    if (path !== ":memory:") chmodSync(path, 0o600);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS brands (id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, brand_id TEXT NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS credentials (brand_id TEXT NOT NULL, provider TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (brand_id, provider));
-      CREATE TABLE IF NOT EXISTS idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-    this.transaction(() => {
-      if (!this.db.prepare("SELECT value FROM metadata WHERE key = 'seeded'").get()) {
-        this.seed();
-        this.db.prepare("INSERT INTO metadata VALUES ('seeded', '1')").run();
-      }
-    });
+  readonly database: Database;
+  readonly ready: Promise<void>;
+  get db() {
+    if (!this.database.sqlite) throw new Error("SQLite access is unavailable with PostgreSQL.");
+    return this.database.sqlite;
   }
-  transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try { const result = fn(); this.db.exec("COMMIT"); return result; }
-    catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  constructor(path = process.env.DATABASE_PATH ?? resolve("data/limitless.sqlite"), database?: Database) {
+    this.database = database ?? new SqliteDatabase(path);
+    this.ready = this.database.ready;
+    if (this.database.sqlite) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!this.db.prepare("SELECT value FROM metadata WHERE key = 'seeded'").get()) {
+          this.seed();
+          this.db.prepare("INSERT INTO metadata VALUES ('seeded', '1')").run();
+        }
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    }
   }
-  brands(): Brand[] { return this.rows<Brand>("brands"); }
-  orders(): Order[] { return this.rows<Order>("orders").sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
-  activity(): Activity[] { return this.rows<Activity>("activity").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50); }
-  private rows<T>(table: "brands" | "orders" | "activity"): T[] { return this.db.prepare(`SELECT data FROM ${table} ORDER BY rowid`).all().map(row => JSON.parse(row.data as string) as T); }
-  brand(identifier: string, bySlug = false): Brand {
-    const row = this.db.prepare(`SELECT data FROM brands WHERE ${bySlug ? "slug" : "id"} = ?`).get(identifier);
+  transaction<T>(fn: () => Promise<T>): Promise<T> { return this.database.transaction(fn); }
+  async close() { await this.database.close(); }
+  async brands(): Promise<Brand[]> { return this.rows<Brand>("brands"); }
+  async orders(): Promise<Order[]> { return (await this.rows<Order>("orders")).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
+  async activity(): Promise<Activity[]> { return (await this.rows<Activity>("activity")).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50); }
+  private async rows<T>(table: "brands" | "orders" | "activity"): Promise<T[]> { return (await this.database.all(`SELECT data FROM ${table} ORDER BY ${this.database.rowOrder}`)).map(row => JSON.parse(row.data as string) as T); }
+  async brand(identifier: string, bySlug = false): Promise<Brand> {
+    const row = await this.database.get(`SELECT data FROM brands WHERE ${bySlug ? "slug" : "id"} = ?`, identifier);
     if (!row) throw new HttpError(404, "Brand not found.");
     return JSON.parse(row.data as string);
   }
-  saveBrand(brand: Brand): Brand {
-    this.db.prepare("INSERT INTO brands VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug, data=excluded.data").run(brand.id, brand.slug, JSON.stringify(brand));
+  async saveBrand(brand: Brand): Promise<Brand> {
+    await this.database.run("INSERT INTO brands (id, slug, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug, data=excluded.data", brand.id, brand.slug, JSON.stringify(brand));
     return brand;
   }
-  addActivity(message: string, type: Activity["type"], brandId?: string) {
+  async addActivity(message: string, type: Activity["type"], brandId?: string) {
     const item: Activity = { id: id("act"), message, type, brandId, createdAt: now() };
-    this.db.prepare("INSERT INTO activity VALUES (?, ?)").run(item.id, JSON.stringify(item));
+    await this.database.run("INSERT INTO activity (id, data) VALUES (?, ?)", item.id, JSON.stringify(item));
   }
-  createBrand(input: unknown): Brand {
+  async createBrand(input: unknown): Promise<Brand> {
     const data = brandInput.parse(input);
     const base = data.name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "brand";
-    return this.transaction(() => {
+    return this.transaction(async () => {
       let slug = base; let suffix = 2;
-      while (this.db.prepare("SELECT id FROM brands WHERE slug = ?").get(slug)) slug = `${base}-${suffix++}`;
+      while (await this.database.get("SELECT id FROM brands WHERE slug = ?", slug)) slug = `${base}-${suffix++}`;
       const brand: Brand = { ...data, id: id("brand"), slug, logoInitial: data.name.charAt(0).toUpperCase(), checkoutTitle: "A little more everyday.", announcement: "Thoughtfully made. Delivered to you.", supportEmail: "", shippingPrice: 5, freeShippingThreshold: 75, status: "draft", mode: "demo", shopify: { status: "not_connected" }, whop: { status: "not_connected" }, products: [], createdAt: now() };
-      this.saveBrand(brand); this.addActivity(`${brand.name} added as a demo draft`, "brand", brand.id);
+      await this.saveBrand(brand); await this.addActivity(`${brand.name} added as a demo draft`, "brand", brand.id);
       return brand;
     });
   }
-  updateBrand(brandId: string, input: unknown) {
+  async updateBrand(brandId: string, input: unknown) {
     const data = brandPatch.parse(input);
-    return this.transaction(() => {
-      const brand = this.brand(brandId);
+    return this.transaction(async () => {
+      const brand = await this.brand(brandId);
       if (data.accountDetails) {
         for (const provider of ["shopify", "whop"] as const) {
           const next = provider === "shopify" ? data.accountDetails.shopifyDomain : data.accountDetails.whopCompanyId;
@@ -78,46 +76,46 @@ export class Store {
       return this.saveBrand({ ...brand, ...data, logoInitial: (data.name ?? brand.name).charAt(0).toUpperCase() });
     });
   }
-  setCredential(brandId: string, provider: string, value: object) {
-    this.db.prepare("INSERT INTO credentials VALUES (?, ?, ?) ON CONFLICT(brand_id, provider) DO UPDATE SET data=excluded.data").run(brandId, provider, encrypt(JSON.stringify(value), `${brandId}:${provider}`));
+  async setCredential(brandId: string, provider: string, value: object) {
+    await this.database.run("INSERT INTO credentials (brand_id, provider, data) VALUES (?, ?, ?) ON CONFLICT(brand_id, provider) DO UPDATE SET data=excluded.data", brandId, provider, encrypt(JSON.stringify(value), `${brandId}:${provider}`));
   }
-  addTestProduct(brandId: string, input: unknown): Brand {
+  async addTestProduct(brandId: string, input: unknown): Promise<Brand> {
     const data = testProductInput.parse(input);
-    return this.transaction(() => {
-      const brand = this.brand(brandId);
+    return this.transaction(async () => {
+      const brand = await this.brand(brandId);
       if (brand.mode !== "demo") throw new HttpError(409, "Manual test products are only available in demo mode.");
       if (brand.products.length >= 250) throw new HttpError(409, "This brand’s test catalog is full.");
       brand.products.push({ id: id("test_product"), ...data, available: true });
-      this.saveBrand(brand);
-      this.addActivity(`Test product added to ${brand.name}`, "brand", brandId);
+      await this.saveBrand(brand);
+      await this.addActivity(`Test product added to ${brand.name}`, "brand", brandId);
       return brand;
     });
   }
-  credential<T>(brandId: string, provider: string): T {
-    const row = this.db.prepare("SELECT data FROM credentials WHERE brand_id = ? AND provider = ?").get(brandId, provider);
+  async credential<T>(brandId: string, provider: string): Promise<T> {
+    const row = await this.database.get("SELECT data FROM credentials WHERE brand_id = ? AND provider = ?", brandId, provider);
     if (!row) throw new HttpError(409, `Connect ${provider} first.`);
     return JSON.parse(decrypt(row.data as string, `${brandId}:${provider}`));
   }
-  publish(brandId: string, mode: "demo" | "live") {
+  async publish(brandId: string, mode: "demo" | "live") {
     if (mode === "live") throw new HttpError(409, "Live checkout is not enabled. Payment authorization, signed webhooks, idempotent Shopify order synchronization, taxes, inventory, shipping, and provider policy approval must be completed first. Publish a demo instead.");
-    return this.transaction(() => {
-      const brand = this.brand(brandId);
+    return this.transaction(async () => {
+      const brand = await this.brand(brandId);
       if (!brand.products.some(p => p.available)) throw new HttpError(409, "Add or sync at least one available product before publishing.");
       brand.status = "live"; brand.mode = "demo";
-      this.saveBrand(brand); this.addActivity(`${brand.name} demo checkout published — no real payments`, "brand", brand.id);
+      await this.saveBrand(brand); await this.addActivity(`${brand.name} demo checkout published — no real payments`, "brand", brand.id);
       return brand;
     });
   }
-  checkout(slug: string, input: unknown, allowDraft: boolean, idemKey?: string) {
+  async checkout(slug: string, input: unknown, allowDraft: boolean, idemKey?: string) {
     const data = checkoutInput.parse(input);
-    return this.transaction(() => {
-      const brand = this.brand(slug, true);
+    return this.transaction(async () => {
+      const brand = await this.brand(slug, true);
       if (brand.status !== "live" && !allowDraft) throw new HttpError(404, "Checkout is not published.");
       if (brand.mode !== "demo") throw new HttpError(409, "Live payments are not enabled.");
       const fingerprint = createHash("sha256").update(JSON.stringify(data)).digest("hex");
       const scopedKey = idemKey ? `${brand.id}:${idemKey}` : undefined;
       if (scopedKey) {
-        const previous = this.db.prepare("SELECT fingerprint, data FROM idempotency WHERE key = ?").get(scopedKey);
+        const previous = await this.database.get("SELECT fingerprint, data FROM idempotency WHERE key = ?", scopedKey);
         if (previous) {
           if (previous.fingerprint !== fingerprint) throw new HttpError(409, "Idempotency key was already used for a different order.");
           return JSON.parse(previous.data as string) as { orderId: string; mode: "demo"; total: number };
@@ -133,10 +131,10 @@ export class Store {
       catch (error) { throw new HttpError(422, error instanceof Error ? error.message : "Invalid checkout options."); }
       const total = breakdown.total;
       const order: Order = { id: id("demo"), brandId: brand.id, customer: `${data.customer.firstName} ${data.customer.lastName}`, email: data.customer.email, total, currency: "USD", status: "paid", syncStatus: "demo", mode: "demo", items, breakdown, createdAt: now() };
-      this.db.prepare("INSERT INTO orders VALUES (?, ?, ?)").run(order.id, brand.id, JSON.stringify(order));
-      this.addActivity(`Demo order placed for ${brand.name} — no payment collected`, "order", brand.id);
+      await this.database.run("INSERT INTO orders (id, brand_id, data) VALUES (?, ?, ?)", order.id, brand.id, JSON.stringify(order));
+      await this.addActivity(`Demo order placed for ${brand.name} — no payment collected`, "order", brand.id);
       const result = { orderId: order.id, mode: "demo" as const, total, breakdown };
-      if (scopedKey) this.db.prepare("INSERT INTO idempotency VALUES (?, ?, ?)").run(scopedKey, fingerprint, JSON.stringify(result));
+      if (scopedKey) await this.database.run("INSERT INTO idempotency (key, fingerprint, data) VALUES (?, ?, ?)", scopedKey, fingerprint, JSON.stringify(result));
       return result;
     });
   }
@@ -148,12 +146,13 @@ export class Store {
     ];
     for (const [index, sample] of samples.entries()) {
       const brand: Brand = { id: `brand_${index + 1}`, name: sample.name, slug: sample.slug, category: sample.category, domain: "", accent: sample.accent, logoInitial: sample.name[0], checkoutTitle: "Good things, on their way.", announcement: "Complimentary shipping on orders $75+", supportEmail: "", shippingPrice: 5, freeShippingThreshold: 75, status: "draft", mode: "demo", shopify: { status: "not_connected" }, whop: { status: "not_connected" }, products: [{ id: `product_${index + 1}`, title: sample.title, description: sample.description, price: sample.price, compareAtPrice: sample.price + 12, image: sample.image, available: true }], createdAt: now() };
-      this.saveBrand(brand);
-      this.addActivity(`${brand.name} sample brand added — demo data`, "brand", brand.id);
+      this.db.prepare("INSERT INTO brands VALUES (?, ?, ?)").run(brand.id, brand.slug, JSON.stringify(brand));
+      const activity: Activity = { id: id("act"), message: `${brand.name} sample brand added — demo data`, type: "brand", brandId: brand.id, createdAt: now() };
+      this.db.prepare("INSERT INTO activity VALUES (?, ?)").run(activity.id, JSON.stringify(activity));
     }
     const names = ["Alex Morgan", "Jamie Rivera", "Taylor Chen", "Sam Parker", "Jordan Ellis", "Casey Brooks", "Drew Hayes", "Riley Quinn"];
     names.forEach((name, index) => {
-      const brand = this.brand(`brand_${index % 3 + 1}`); const product = brand.products[0]; const quantity = index % 3 === 0 ? 2 : 1;
+      const brand: Brand = JSON.parse(this.db.prepare("SELECT data FROM brands WHERE id = ?").get(`brand_${index % 3 + 1}`)!.data as string); const product = brand.products[0]; const quantity = index % 3 === 0 ? 2 : 1;
       const subtotal = product.price * quantity;
       const order: Order = { id: `demo_sample_${index + 1}`, brandId: brand.id, customer: `${name} (demo)`, email: `sample${index + 1}@example.com`, total: subtotal + (subtotal >= 75 ? 0 : 5), currency: "USD", status: index === 5 ? "pending" : "paid", syncStatus: "demo", mode: "demo", items: [{ title: product.title, quantity, price: product.price }], createdAt: new Date(Date.now() - index * 3600000 * 7).toISOString() };
       this.db.prepare("INSERT INTO orders VALUES (?, ?, ?)").run(order.id, brand.id, JSON.stringify(order));
@@ -161,10 +160,28 @@ export class Store {
   }
 }
 
-const globalStore = globalThis as typeof globalThis & { limitlessStore?: Store };
-export function store() {
-  const instance = globalStore.limitlessStore ??= new Store();
-  // Keep the open SQLite connection, but refresh methods after a development hot reload.
+const globalStore = globalThis as typeof globalThis & { limitlessStore?: Store; limitlessStoreKey?: string };
+export async function store() {
+  const key = createHash("sha256").update(JSON.stringify([process.env.DATABASE_URL, process.env.DATABASE_CA_CERT, process.env.DATABASE_PATH, process.env.NETLIFY])).digest("hex");
+  if (globalStore.limitlessStore && globalStore.limitlessStoreKey && globalStore.limitlessStoreKey !== key) {
+    throw new HttpError(503, "Database settings changed. Restart the application before using the new connection.");
+  }
+  if (!globalStore.limitlessStore) {
+    if (process.env.DATABASE_URL !== undefined) {
+      globalStore.limitlessStore = new Store(undefined, new PostgresDatabase(new Pool(postgresConfig(process.env.DATABASE_URL))));
+    } else {
+      if (process.env.NETLIFY) throw new HttpError(503, "Configure DATABASE_URL before deploying to Netlify. Local storage is not persistent there.");
+      globalStore.limitlessStore = new Store();
+    }
+    globalStore.limitlessStoreKey = key;
+  }
+  const instance = globalStore.limitlessStore;
+  try { await instance.ready; }
+  catch (error) {
+    if (globalStore.limitlessStore === instance) { delete globalStore.limitlessStore; delete globalStore.limitlessStoreKey; await instance.close(); }
+    throw error;
+  }
+  // Keep the connection, but refresh methods after a development hot reload.
   if (process.env.NODE_ENV !== "production" && Object.getPrototypeOf(instance) !== Store.prototype) Object.setPrototypeOf(instance, Store.prototype);
   return instance;
 }

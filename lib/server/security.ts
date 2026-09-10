@@ -14,7 +14,7 @@ export function authConfigured() {
   return (hash ? HASH_PATTERN.test(hash) : password.length >= 16) && (process.env.SESSION_SECRET || "").length >= 32;
 }
 export function demoMode() {
-  return process.env.NODE_ENV !== "production" && !process.env.ADMIN_PASSWORD && !process.env.ADMIN_PASSWORD_HASH && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
+  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !process.env.ADMIN_PASSWORD && !process.env.ADMIN_PASSWORD_HASH && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
 }
 export function encryptionConfigured() { return /^[a-fA-F0-9]{64}$/.test(process.env.CREDENTIAL_ENCRYPTION_KEY || ""); }
 

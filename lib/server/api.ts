@@ -35,25 +35,26 @@ export async function handleApi(request: Request): Promise<Response> {
 
   if (path === "/api/state" && method === "GET") {
     requireAdmin(request);
-    const db = store();
-    const state: AppState = { brands: db.brands(), orders: db.orders(), activity: db.activity(), environment: { demo: demoMode(), liveEnabled: false, credentialsConfigured: authConfigured() && encryptionConfigured(), authenticated: authenticated(request) } };
+    const db = await store();
+    const [brands, orders, activity] = await Promise.all([db.brands(), db.orders(), db.activity()]);
+    const state: AppState = { brands, orders, activity, environment: { demo: demoMode(), liveEnabled: false, credentialsConfigured: authConfigured() && encryptionConfigured(), authenticated: authenticated(request) } };
     return json(state);
   }
   if (path === "/api/brands" && method === "POST") {
     requireAdmin(request); rateLimit("brand-create", 60, 60000);
-    return json(store().createBrand(await body(request)), 201);
+    return json(await (await store()).createBrand(await body(request)), 201);
   }
   const checkout = path.match(/^\/api\/checkout\/([a-z0-9-]+)$/);
   if (checkout && (method === "GET" || method === "POST")) {
     if (!authConfigured() && !demoMode()) throw new HttpError(503, "This deployment is not configured for checkout.");
-    const slug = checkout[1]; const db = store(); const brand = db.brand(slug, true);
+    const slug = checkout[1]; const db = await store(); const brand = await db.brand(slug, true);
     const allowDraft = site.kind === "admin" && (authenticated(request) || demoMode());
     if (brand.status !== "live" && !allowDraft) throw new HttpError(404, "Checkout is not published.");
     if (method === "GET") return json(publicBrand(brand));
     rateLimit("checkout", 120, 60000);
     const key = request.headers.get("idempotency-key") ?? undefined;
     if (key && !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
-    return json(db.checkout(slug, await body(request), allowDraft, key), 201);
+    return json(await db.checkout(slug, await body(request), allowDraft, key), 201);
   }
   const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote))?$/);
   if (brandRoute) {
@@ -61,26 +62,26 @@ export async function handleApi(request: Request): Promise<Response> {
     requireAdmin(request);
     if (action === "payment-quote" && method === "POST") {
       requireCredentials(request); rateLimit("payment-quote", 10, 60000);
-      const db = store(); const brand = db.brand(brandId);
-      const credentials = db.credential<ShopifyCredentials>(brandId, "shopify");
+      const db = await store(); const brand = await db.brand(brandId);
+      const credentials = await db.credential<ShopifyCredentials>(brandId, "shopify");
       const result = await calculatePaymentQuote(brand, credentials, await body(request));
-      const current = db.credential<ShopifyCredentials>(brandId, "shopify");
+      const current = await db.credential<ShopifyCredentials>(brandId, "shopify");
       if (current.domain !== credentials.domain || current.accessToken !== credentials.accessToken) throw new HttpError(409, "Connection changed during calculation. Request a new calculation.");
       return json(result);
     }
-    if (!action && method === "PATCH") return json(store().updateBrand(brandId, await body(request)));
+    if (!action && method === "PATCH") return json(await (await store()).updateBrand(brandId, await body(request)));
     if (action === "products" && method === "POST") {
       rateLimit("test-product-create", 60, 60000);
-      return json(store().addTestProduct(brandId, await body(request)), 201);
+      return json(await (await store()).addTestProduct(brandId, await body(request)), 201);
     }
-    if (action === "publish" && method === "POST") return json(store().publish(brandId, publishInput.parse(await body(request)).mode));
+    if (action === "publish" && method === "POST") return json(await (await store()).publish(brandId, publishInput.parse(await body(request)).mode));
     if (action === "connections" && method === "POST") {
       requireCredentials(request); rateLimit("connections", 20, 60000);
-      const input = connectionInput.parse(await body(request)); const db = store(); db.brand(brandId);
+      const input = connectionInput.parse(await body(request)); const db = await store(); await db.brand(brandId);
       const account = input.provider === "shopify" ? await verifyShopify(input) : await verifyWhop(input.companyId, input.apiKey);
-      return json(db.transaction(() => {
-        const brand = db.brand(brandId);
-        db.setCredential(brandId, input.provider, input);
+      return json(await db.transaction(async () => {
+        const brand = await db.brand(brandId);
+        await db.setCredential(brandId, input.provider, input);
         brand.accountDetails = {
           ...accountDetails(brand),
           ...(input.provider === "shopify" ? { shopifyDomain: account } : { whopCompanyId: account }),
@@ -90,22 +91,22 @@ export async function handleApi(request: Request): Promise<Response> {
           // Reconnecting a different catalog invalidates published product references.
           brand.products = []; brand.status = "draft";
         }
-        db.saveBrand(brand); db.addActivity(`${brand.name}: ${input.provider} API access verified (not live payments)`, "connection", brand.id);
+        await db.saveBrand(brand); await db.addActivity(`${brand.name}: ${input.provider} API access verified (not live payments)`, "connection", brand.id);
         return brand;
       }));
     }
     if (action === "products/sync" && method === "POST") {
       requireCredentials(request); rateLimit("product-sync", 5, 60000);
-      const db = store(); db.brand(brandId);
-      const credentials = db.credential<ShopifyCredentials>(brandId, "shopify");
+      const db = await store(); await db.brand(brandId);
+      const credentials = await db.credential<ShopifyCredentials>(brandId, "shopify");
       const products = await syncShopify(credentials);
-      return json(db.transaction(() => {
-        const current = db.credential<ShopifyCredentials>(brandId, "shopify");
+      return json(await db.transaction(async () => {
+        const current = await db.credential<ShopifyCredentials>(brandId, "shopify");
         if (current.domain !== credentials.domain || current.accessToken !== credentials.accessToken) throw new HttpError(409, "Connection changed during import. Sync again.");
-        const brand = db.brand(brandId); brand.products = products;
+        const brand = await db.brand(brandId); brand.products = products;
         if (!products.some(p => p.available)) brand.status = "draft";
         brand.shopify = { ...brand.shopify, status: "verified", checkedAt: new Date().toISOString() };
-        db.saveBrand(brand); db.addActivity(`${products.length} Shopify variants imported for ${brand.name}`, "connection", brandId);
+        await db.saveBrand(brand); await db.addActivity(`${products.length} Shopify variants imported for ${brand.name}`, "connection", brandId);
         return brand;
       }));
     }

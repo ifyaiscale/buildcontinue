@@ -128,7 +128,7 @@ test("CSRF endpoint stays unavailable to checkout hosts and cross-site challenge
 
 test("authenticated dashboard requests work through proxy proof without enabling live checkout", async () => configured(async () => {
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
-  const previous = globals.limitlessStore; const db = new Store(":memory:"); globals.limitlessStore = db;
+  const previous = globals.limitlessStore; const db = new Store(":memory:"); await db.ready; globals.limitlessStore = db;
   try {
     const session = cookiePair(sessionCookie()); const proof = csrfChallenge(get(session));
     const cookies = `${session}; ${cookiePair(proof.cookie!)}`;

@@ -20,6 +20,7 @@ async function withApi(run: (db: Store, call: (path: string, method?: string, pa
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
   const previousStore = globals.limitlessStore;
   const db = new Store(":memory:");
+  await db.ready;
   globals.limitlessStore = db;
   keys.forEach(key => delete process.env[key]);
   Object.assign(process.env, { NODE_ENV: "development" });
@@ -52,7 +53,7 @@ test("account details keep storefront, Shopify aliases, and Whop IDs distinct wi
     assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM credentials").get()?.n, 0);
     const updated = await call(`/api/brands/${brand.id}`, "PATCH", { accountDetails: { ...details, shopifyDomain: " ORIGINAL-SHOP.MYSHOPIFY.COM ", whopCompanyId: "biz_Example" } });
     assert.equal(updated.status, 200);
-    const saved = db.brand(brand.id);
+    const saved = await db.brand(brand.id);
     assert.equal(saved.domain, "brand.example");
     assert.equal(saved.accountDetails?.shopifyDomain, "original-shop.myshopify.com");
     assert.equal(saved.accountDetails?.whopCompanyId, "biz_Example");
@@ -61,8 +62,9 @@ test("account details keep storefront, Shopify aliases, and Whop IDs distinct wi
   });
 });
 
-test("identifier validation rejects unsafe URLs, duplicate aliases, secrets, and status injection", () => {
+test("identifier validation rejects unsafe URLs, duplicate aliases, secrets, and status injection", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
     for (const invalid of [
       { shopifyDomain: "brand.example" },
@@ -77,17 +79,18 @@ test("identifier validation rejects unsafe URLs, duplicate aliases, secrets, and
       { apiKey: "secret" },
       { accessToken: "secret" },
       { status: "verified" },
-    ]) assert.throws(() => db.updateBrand("brand_1", { accountDetails: { ...details, ...invalid } }));
-    assert.equal(db.brand("brand_1").accountDetails, undefined);
+    ]) await assert.rejects(async () => await db.updateBrand("brand_1", { accountDetails: { ...details, ...invalid } }));
+    assert.equal((await db.brand("brand_1")).accountDetails, undefined);
   } finally { db.db.close(); }
 });
 
-test("legacy defaults prefill only API domains, never public storefronts", () => {
+test("legacy defaults prefill only API domains, never public storefronts", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
-    let brand = db.updateBrand("brand_1", { domain: "brand.example" });
+    let brand = await db.updateBrand("brand_1", { domain: "brand.example" });
     assert.equal(accountDetails(brand).shopifyDomain, "");
-    brand = db.updateBrand("brand_1", { domain: "legacy.myshopify.com" });
+    brand = await db.updateBrand("brand_1", { domain: "legacy.myshopify.com" });
     assert.equal(accountDetails(brand).shopifyDomain, "legacy.myshopify.com");
     brand.shopify = { status: "verified", account: "verified.myshopify.com" };
     brand.whop = { status: "verified", account: "biz_Verified" };
@@ -98,8 +101,8 @@ test("legacy defaults prefill only API domains, never public storefronts", () =>
 
 test("public checkout redacts account metadata and production protects identifier edits", async () => {
   await withApi(async (db, call) => {
-    db.updateBrand("brand_1", { domain: "private-store.example", accountDetails: { ...details, whopCompanyId: "biz_Private" } });
-    db.publish("brand_1", "demo");
+    await db.updateBrand("brand_1", { domain: "private-store.example", accountDetails: { ...details, whopCompanyId: "biz_Private" } });
+    await db.publish("brand_1", "demo");
     let response = await call("/api/checkout/aure-studio");
     assert.equal(response.status, 200);
     const publicBrand = await response.json();
@@ -123,36 +126,36 @@ test("only successful provider verification changes a verified account mapping",
     process.env.SESSION_SECRET = "s".repeat(32);
     process.env.CREDENTIAL_ENCRYPTION_KEY = "a".repeat(64);
     const cookie = sessionCookie().split(";", 1)[0];
-    db.updateBrand("brand_1", { accountDetails: details });
+    await db.updateBrand("brand_1", { accountDetails: details });
     const originalFetch = globalThis.fetch;
     try {
       globalThis.fetch = async () => new Response(JSON.stringify({ id: "biz_Original" }), { status: 200 });
       let response = await call("/api/brands/brand_1/connections", "POST", { provider: "whop", companyId: "biz_Original", apiKey: "test-whop-secret" }, cookie);
       assert.equal(response.status, 200);
-      assert.equal(db.brand("brand_1").accountDetails?.whopCompanyId, "biz_Original");
-      assert.deepEqual(db.brand("brand_1").accountDetails?.shopifyAliases, details.shopifyAliases);
-      assert.throws(() => db.updateBrand("brand_1", { accountDetails: { ...details, whopCompanyId: "biz_Replacement" } }), /Verify the replacement whop/);
+      assert.equal((await db.brand("brand_1")).accountDetails?.whopCompanyId, "biz_Original");
+      assert.deepEqual((await db.brand("brand_1")).accountDetails?.shopifyAliases, details.shopifyAliases);
+      await assert.rejects(async () => await db.updateBrand("brand_1", { accountDetails: { ...details, whopCompanyId: "biz_Replacement" } }), /Verify the replacement whop/);
       globalThis.fetch = async () => new Response("denied", { status: 401 });
       response = await call("/api/brands/brand_1/connections", "POST", { provider: "whop", companyId: "biz_Replacement", apiKey: "incorrect-test-secret" }, cookie);
       assert.equal(response.status, 422);
-      assert.equal(db.brand("brand_1").whop.account, "biz_Original");
-      assert.equal(db.brand("brand_1").accountDetails?.whopCompanyId, "biz_Original");
-      assert.equal(db.credential<{ apiKey: string }>("brand_1", "whop").apiKey, "test-whop-secret");
+      assert.equal((await db.brand("brand_1")).whop.account, "biz_Original");
+      assert.equal((await db.brand("brand_1")).accountDetails?.whopCompanyId, "biz_Original");
+      assert.equal((await db.credential<{ apiKey: string }>("brand_1", "whop")).apiKey, "test-whop-secret");
       globalThis.fetch = async () => new Response(JSON.stringify({ id: "biz_Replacement" }), { status: 200 });
       response = await call("/api/brands/brand_1/connections", "POST", { provider: "whop", companyId: "biz_Replacement", apiKey: "new-test-secret" }, cookie);
       assert.equal(response.status, 200);
-      assert.equal(db.brand("brand_1").accountDetails?.whopCompanyId, "biz_Replacement");
-      assert.equal(db.brand("brand_1").whop.account, "biz_Replacement");
+      assert.equal((await db.brand("brand_1")).accountDetails?.whopCompanyId, "biz_Replacement");
+      assert.equal((await db.brand("brand_1")).whop.account, "biz_Replacement");
       assert.equal((await response.text()).includes("new-test-secret"), false);
       const shopifyDomain = "original-shop.myshopify.com";
       globalThis.fetch = async () => new Response(JSON.stringify({ data: { shop: { name: "Example", myshopifyDomain: shopifyDomain, currencyCode: "USD" }, currentAppInstallation: { accessScopes: [{ handle: "read_products" }, { handle: "read_inventory" }] } } }), { status: 200 });
       response = await call("/api/brands/brand_1/connections", "POST", { provider: "shopify", domain: shopifyDomain, accessToken: "test-shopify-secret" }, cookie);
       assert.equal(response.status, 200);
-      assert.equal(db.brand("brand_1").accountDetails?.shopifyDomain, shopifyDomain);
-      assert.equal(db.brand("brand_1").accountDetails?.whopCompanyId, "biz_Replacement");
-      assert.equal(db.brand("brand_1").status, "draft");
-      assert.equal(db.brand("brand_1").products.length, 0);
-      assert.throws(() => db.updateBrand("brand_1", { accountDetails: { ...accountDetails(db.brand("brand_1")), shopifyDomain: "replacement.myshopify.com" } }), /Verify the replacement shopify/);
+      assert.equal((await db.brand("brand_1")).accountDetails?.shopifyDomain, shopifyDomain);
+      assert.equal((await db.brand("brand_1")).accountDetails?.whopCompanyId, "biz_Replacement");
+      assert.equal((await db.brand("brand_1")).status, "draft");
+      assert.equal((await db.brand("brand_1")).products.length, 0);
+      await assert.rejects(async () => await db.updateBrand("brand_1", { accountDetails: { ...accountDetails(await db.brand("brand_1")), shopifyDomain: "replacement.myshopify.com" } }), /Verify the replacement shopify/);
     } finally { globalThis.fetch = originalFetch; }
   });
 });

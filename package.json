@@ -7,17 +7,21 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "node scripts/test.mjs",
+    "db:check": "node --env-file-if-exists=.env.local --import tsx scripts/database.ts check",
+    "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/database.ts migrate"
   },
   "dependencies": {
     "lucide-react": "^0.577.0",
     "next": "^16.2.1",
+    "pg": "^8.23.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "prettier": "^3.9.6",

@@ -19,6 +19,7 @@ test("new brand can add a test product, publish, and complete an order through t
   const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
   const previousStore = globals.limitlessStore;
   const db = new Store(":memory:");
+  await db.ready;
   globals.limitlessStore = db;
   const handler = route(handleApi);
   const post = (path: string, body: unknown) =>
@@ -73,7 +74,7 @@ test("new brand can add a test product, publish, and complete an order through t
     assert.equal(result.total, 64.9);
     assert.equal(result.mode, "demo");
     assert.equal(
-      db.orders().find((order) => order.id === result.orderId)?.brandId,
+      (await db.orders()).find((order) => order.id === result.orderId)?.brandId,
       brand.id,
     );
   } finally {
@@ -86,30 +87,31 @@ test("new brand can add a test product, publish, and complete an order through t
   }
 });
 
-test("manual products reject invalid prices, injected fields, and live brands", () => {
+test("manual products reject invalid prices, injected fields, and live brands", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
     for (const price of [-1, 0, Infinity, 0.001, 100001]) {
-      assert.throws(() =>
-        db.addTestProduct("brand_1", {
+      await assert.rejects(async () =>
+        await db.addTestProduct("brand_1", {
           title: "Sample",
           description: "",
           price,
         }),
       );
     }
-    assert.throws(() =>
-      db.addTestProduct("brand_1", {
+    await assert.rejects(async () =>
+      await db.addTestProduct("brand_1", {
         title: "Sample",
         price: 20,
         variantId: "malicious",
       }),
     );
-    const brand = db.brand("brand_1");
+    const brand = await db.brand("brand_1");
     brand.mode = "live";
-    db.saveBrand(brand);
-    assert.throws(
-      () => db.addTestProduct(brand.id, { title: "Sample", price: 20 }),
+    await db.saveBrand(brand);
+    await assert.rejects(
+      async () => await db.addTestProduct(brand.id, { title: "Sample", price: 20 }),
       /only available in demo/,
     );
   } finally {

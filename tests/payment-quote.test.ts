@@ -37,7 +37,7 @@ function calculation(selected = false) {
 }
 type Calculation = ReturnType<typeof calculation>;
 type Call = { query: string; variables?: { input: Record<string, unknown> } };
-function mockProvider(options: { mutate?: (draft: Calculation, selected: boolean) => void; scopes?: string[]; currency?: string; userErrors?: { message: string }[]; fail?: boolean } = {}) {
+function mockProvider(options: { mutate?: (draft: Calculation, selected: boolean) => void | Promise<void>; scopes?: string[]; currency?: string; userErrors?: { message: string }[]; fail?: boolean } = {}) {
   const calls: Call[] = [];
   globalThis.fetch = async (url, init) => {
     assert.equal(url, "https://test.myshopify.com/admin/api/2026-07/graphql.json");
@@ -51,7 +51,7 @@ function mockProvider(options: { mutate?: (draft: Calculation, selected: boolean
     assert.doesNotMatch(call.query, /draftOrderCreate|draftOrderComplete|orderCreate/);
     if (options.fail) throw new Error("synthetic network failure");
     const selected = !!call.variables?.input.shippingLine;
-    const draft = calculation(selected); options.mutate?.(draft, selected);
+    const draft = calculation(selected); await options.mutate?.(draft, selected);
     return Response.json({ data: { draftOrderCalculate: { calculatedDraftOrder: draft, userErrors: options.userErrors ?? [] } } });
   };
   return calls;
@@ -59,10 +59,11 @@ function mockProvider(options: { mutate?: (draft: Calculation, selected: boolean
 async function fixture(fn: (db: Store) => Promise<void>) {
   const originalFetch = globalThis.fetch;
   const db = new Store(":memory:");
-  const brand = db.brand("brand_1");
+  await db.ready;
+  const brand = await db.brand("brand_1");
   brand.shopify = { status: "verified", account: credentials.domain };
   brand.products = [{ id: "imported-product", variantId, title: "Test variant", description: "Synthetic", available: true, price: 0.01 }];
-  db.saveBrand(brand);
+  await db.saveBrand(brand);
   try { await fn(db); } finally { globalThis.fetch = originalFetch; db.db.close(); }
 }
 
@@ -90,7 +91,7 @@ test("preflight accepts only bounded launch-market guest requests, not customer 
 test("preflight discovers Shopify rates and totals without trusting the catalog price or writing data", async () => fixture(async db => {
   const before = db.db.prepare("SELECT total_changes() AS changes").get();
   const calls = mockProvider();
-  const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, input);
+  const result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, input);
   assert.equal(result.status, "shipping_selection_required"); assert.equal(result.paymentReady, false); assert.equal(result.mode, "diagnostic");
   assert.equal(result.totals.subtotalCents, 3998); assert.equal(result.totals.taxCents, 320);
   assert.equal(result.selectedShippingRateHandle, null);
@@ -107,7 +108,7 @@ test("all five launch countries reach Shopify with their own address and USD for
   for (const address of launchAddresses) {
     const calls = mockProvider();
     const shippingAddress = addressFor(address);
-    const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress, shippingRateHandle: "standard-rate" });
+    const result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingAddress, shippingRateHandle: "standard-rate" });
     assert.equal(result.status, "calculated"); assert.equal(result.currency, "USD"); assert.equal(result.paymentReady, false);
     assert.equal(calls.length, 3);
     for (const call of calls.slice(1)) {
@@ -144,7 +145,7 @@ test("non-USD shipping or totals are rejected for every international launch cou
       (draft: Calculation) => { draft.availableShippingRates[0].price.currencyCode = localCurrency; },
     ]) {
       mockProvider({ mutate });
-      await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) }), /unsupported pricing calculation/);
+      await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) }), /unsupported pricing calculation/);
     }
   }
 }));
@@ -152,32 +153,33 @@ test("non-USD shipping or totals are rejected for every international launch cou
 test("launch-country allowlisting does not invent a shipping rate for unconfigured destinations", async () => fixture(async db => {
   for (const address of launchAddresses) {
     mockProvider({ mutate: draft => { draft.availableShippingRates = []; } });
-    const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) });
+    const result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingAddress: addressFor(address) });
     assert.equal(result.status, "blocked"); assert.deepEqual(result.blockers, ["no_shipping_rates"]);
   }
 }));
 
-test("demo checkout enforces the same five countries and never switches currency", () => {
+test("demo checkout enforces the same five countries and never switches currency", async () => {
   const db = new Store(":memory:");
+  await db.ready;
   try {
     const order = { mode: "demo", items: [{ productId: "product_1", quantity: 1 }], customer: { email: "test@example.com", firstName: "Test", lastName: "Buyer", address: "123 Example Street", city: "Test City", postalCode: "1010", country: "US" } };
     for (const country of LAUNCH_COUNTRY_CODES) {
       const request = { ...order, customer: { ...order.customer, country } };
       assert.equal(checkoutInput.safeParse(request).success, true);
-      const result = db.checkout("aure-studio", request, true);
-      assert.equal(db.orders().find(order => order.id === result.orderId)?.currency, "USD");
+      const result = await db.checkout("aure-studio", request, true);
+      assert.equal((await db.orders()).find(order => order.id === result.orderId)?.currency, "USD");
     }
     for (const country of ["DE", "FR", "NL", "UK", "", "United States"]) {
       const request = { ...order, customer: { ...order.customer, country } };
       assert.equal(checkoutInput.safeParse(request).success, false);
-      assert.throws(() => db.checkout("aure-studio", request, true));
+      await assert.rejects(async () => await db.checkout("aure-studio", request, true));
     }
   } finally { db.db.close(); }
 });
 
 test("selected shipping is freshly discovered and applied by handle, never by a custom price", async () => fixture(async db => {
   const calls = mockProvider();
-  const result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
+  const result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
   assert.equal(calls.length, 3); assert.equal(calls[1].variables?.input.shippingLine, undefined);
   assert.deepEqual(calls[2].variables?.input.shippingLine, { shippingRateHandle: "standard-rate" });
   assert.equal(result.status, "calculated"); assert.equal(result.paymentReady, false);
@@ -187,32 +189,32 @@ test("selected shipping is freshly discovered and applied by handle, never by a 
 
 test("stale rates and ignored shipping selection cannot produce a calculated result", async () => fixture(async db => {
   const calls = mockProvider();
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "free-forged-rate" }), /no longer available/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "free-forged-rate" }), /no longer available/);
   assert.equal(calls.length, 2);
   mockProvider({ mutate: (draft, selected) => { if (selected) draft.shippingLine = null; } });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /did not apply/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /did not apply/);
 }));
 
 test("Shopify warnings and absent shipping rates explicitly block the preflight", async () => fixture(async db => {
   const warning = { errorCode: "MARKET_UNSUPPORTED", field: "marketRegionCountryCode", message: "Market pricing is not supported." };
   const calls = mockProvider({ mutate: draft => { draft.warnings = [warning]; } });
-  let result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
+  let result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
   assert.equal(calls.length, 2); assert.equal(result.status, "blocked"); assert.deepEqual(result.warnings, [warning]);
   assert.deepEqual(result.blockers, ["shopify_warnings"]);
   mockProvider({ mutate: draft => { draft.availableShippingRates = []; } });
-  result = await calculatePaymentQuote(db.brand("brand_1"), credentials, input);
+  result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, input);
   assert.equal(result.status, "blocked"); assert.deepEqual(result.blockers, ["no_shipping_rates"]);
   mockProvider({ mutate: (draft, selected) => { if (selected) draft.warnings = [warning]; } });
-  result = await calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
+  result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" });
   assert.equal(result.status, "blocked");
 }));
 
 test("explicit zero tax and tax-inclusive provider totals are preserved, never recomputed", async () => fixture(async db => {
   mockProvider({ mutate: draft => { draft.totalTaxSet = bag("0"); draft.totalPriceSet = bag("39.98"); } });
-  let result = await calculatePaymentQuote(db.brand("brand_1"), credentials, input);
+  let result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, input);
   assert.equal(result.totals.taxCents, 0); assert.equal(result.totals.totalCents, 3998);
   mockProvider({ mutate: draft => { draft.taxesIncluded = true; draft.totalPriceSet = bag("39.98"); } });
-  result = await calculatePaymentQuote(db.brand("brand_1"), credentials, input);
+  result = await calculatePaymentQuote(await db.brand("brand_1"), credentials, input);
   assert.equal(result.totals.taxesIncluded, true); assert.equal(result.totals.taxCents, 320); assert.equal(result.totals.totalCents, 3998);
 }));
 
@@ -231,22 +233,22 @@ test("missing taxes, unsupported currencies and money, and changed cart contents
   ];
   for (const mutate of corruptions) {
     mockProvider({ mutate });
-    await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, input));
+    await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input));
   }
 }));
 
 test("bundle components fail closed before shipping selection, even with an unchanged parent variant", async () => fixture(async db => {
   const calls = mockProvider({ mutate: draft => { draft.lineItems[0].components = [{ quantity: 2 }]; } });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /simple physical-product variants only/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /simple physical-product variants only/);
   assert.equal(calls.length, 2);
   mockProvider({ mutate: (draft, selected) => { if (selected) draft.lineItems[0].components = [{ quantity: 2 }]; } });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /simple physical-product variants only/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, { ...input, shippingRateHandle: "standard-rate" }), /simple physical-product variants only/);
 }));
 
 test("demo, unavailable, foreign variants and mismatched account connections never reach Shopify", async () => fixture(async db => {
   const calls = mockProvider();
   for (const kind of ["demo", "unavailable", "foreign", "mismatched", "unverified"]) {
-    const brand = db.brand("brand_1");
+    const brand = await db.brand("brand_1");
     if (kind === "demo") delete brand.products[0].variantId;
     if (kind === "unavailable") brand.products[0].available = false;
     if (kind === "foreign") brand.products[0].id = "different-brand-product";
@@ -259,15 +261,15 @@ test("demo, unavailable, foreign variants and mismatched account connections nev
 
 test("draft scope, USD currency, provider errors, and outages are checked without fallback prices", async () => fixture(async db => {
   let calls = mockProvider({ scopes: ["read_products", "read_inventory"] });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, input), /write_draft_orders/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /write_draft_orders/);
   assert.equal(calls.length, 1);
   calls = mockProvider({ currency: "EUR" });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, input), /USD stores only/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /USD stores only/);
   assert.equal(calls.length, 1);
   mockProvider({ userErrors: [{ message: "synthetic-private-provider-error" }] });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, input), /could not calculate/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /could not calculate/);
   mockProvider({ fail: true });
-  await assert.rejects(calculatePaymentQuote(db.brand("brand_1"), credentials, input), /could not be reached/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /could not be reached/);
 }));
 
 test("pricing API requires protected admin origin, rejects demo and credential races, and keeps live gated", async () => fixture(async db => {
@@ -283,7 +285,7 @@ test("pricing API requires protected admin origin, rejects demo and credential r
     Object.assign(process.env, { NODE_ENV: "development" });
     assert.equal((await handler(request("http://localhost:3000"))).status, 403);
     Object.assign(process.env, { NODE_ENV: "production", APP_URL: "https://admin.example", CHECKOUT_ORIGINS: JSON.stringify({ "https://checkout.example": "aure-studio" }), ADMIN_PASSWORD: "synthetic-test-password", SESSION_SECRET: "s".repeat(48), CREDENTIAL_ENCRYPTION_KEY: "ab".repeat(32) });
-    db.setCredential("brand_1", "shopify", credentials);
+    await db.setCredential("brand_1", "shopify", credentials);
     const cookie = sessionCookie();
     let calls = mockProvider();
     assert.equal((await handler(request())).status, 401);
@@ -295,13 +297,13 @@ test("pricing API requires protected admin origin, rejects demo and credential r
     assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal((await response.json()).paymentReady, false); assert.equal(calls.length, 2);
     assert.equal((await handler(request("https://admin.example", cookie, "x".repeat(32769)))).status, 413);
-    calls = mockProvider({ mutate: () => { db.setCredential("brand_1", "shopify", { ...credentials, accessToken: "rotated-test-token" }); } });
+    calls = mockProvider({ mutate: async () => { await db.setCredential("brand_1", "shopify", { ...credentials, accessToken: "rotated-test-token" }); } });
     assert.equal((await handler(request("https://admin.example", cookie))).status, 409);
     assert.equal(calls.length, 2);
     const state = await handler(new Request("https://admin.example/api/state", { headers: { cookie } }));
     assert.equal((await state.json()).environment.liveEnabled, false);
-    assert.throws(() => db.publish("brand_1", "live"), /Live checkout is not enabled/);
-    assert.equal(db.orders().length, 8);
+    await assert.rejects(async () => await db.publish("brand_1", "live"), /Live checkout is not enabled/);
+    assert.equal((await db.orders()).length, 8);
   } finally {
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     globals.limitlessStore = previousStore;
