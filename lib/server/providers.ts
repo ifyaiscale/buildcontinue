@@ -1,8 +1,44 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { Product } from "../types";
 import { HttpError } from "./security";
 
-export type ShopifyCredentials = { domain: string; accessToken: string };
+export type ShopifyCredentials = { domain: string; accessToken: string; authMethod?: "access_token" } | { domain: string; authMethod: "client_credentials"; clientId: string; clientSecret: string };
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+const tokenRequests = new Map<string, Promise<string>>();
+export function sameShopifyCredentials(a: ShopifyCredentials, b: ShopifyCredentials) {
+  return a.domain === b.domain && (a.authMethod === "client_credentials"
+    ? b.authMethod === "client_credentials" && a.clientId === b.clientId && a.clientSecret === b.clientSecret
+    : b.authMethod !== "client_credentials" && a.accessToken === b.accessToken);
+}
+async function shopifyToken(credentials: ShopifyCredentials): Promise<string> {
+  if (credentials.authMethod !== "client_credentials") return credentials.accessToken;
+  const key = createHash("sha256").update(JSON.stringify([credentials.domain, credentials.clientId, credentials.clientSecret])).digest("hex");
+  const cached = tokenCache.get(key);
+  if (cached && cached.expiresAt > Date.now() + 60000) return cached.token;
+  const pending = tokenRequests.get(key);
+  if (pending) return pending;
+  const request = (async () => {
+    const startedAt = Date.now();
+    let result: unknown;
+    try {
+      result = await remote(`https://${credentials.domain}/admin/oauth/access_token`, {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "client_credentials", client_id: credentials.clientId, client_secret: credentials.clientSecret }),
+      });
+    } catch {
+      throw new HttpError(422, "Shopify app authorization failed. Confirm the app is installed on this store, both belong to the same eligible Shopify organization, and the Client ID and Client secret are correct.");
+    }
+    const parsed = z.object({ access_token: z.string().min(1).max(2000), expires_in: z.number().int().min(61).max(86400) }).safeParse(result);
+    if (!parsed.success) throw new HttpError(502, "Shopify returned an invalid access token or expiry.");
+    for (const [cacheKey, value] of tokenCache) if (value.expiresAt <= Date.now() + 60000) tokenCache.delete(cacheKey);
+    if (tokenCache.size >= 100) tokenCache.delete(tokenCache.keys().next().value!);
+    tokenCache.set(key, { token: parsed.data.access_token, expiresAt: startedAt + parsed.data.expires_in * 1000 });
+    return parsed.data.access_token;
+  })();
+  tokenRequests.set(key, request);
+  try { return await request; } finally { tokenRequests.delete(key); }
+}
 const version = "2026-07";
 
 async function remote(url: string, init: RequestInit) {
@@ -20,7 +56,7 @@ export async function shopifyGraphql(credentials: ShopifyCredentials, query: str
   // Never accept arbitrary hosts or follow redirects with an access token.
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(credentials.domain)) throw new HttpError(422, "Use your permanent .myshopify.com domain.");
   const result = await remote(`https://${credentials.domain}/admin/api/${version}/graphql.json`, {
-    method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": credentials.accessToken }, body: JSON.stringify({ query, variables }),
+    method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": await shopifyToken(credentials) }, body: JSON.stringify({ query, variables }),
   });
   if (!result?.data || result.errors?.length) throw new HttpError(422, "Shopify could not complete this request. Check the required permissions and supported input.");
   return result.data;

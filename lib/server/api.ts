@@ -3,7 +3,7 @@ import { authenticated, authConfigured, csrfChallenge, demoMode, encryptionConfi
 import { body, json, route } from "./http";
 import { store } from "./store";
 import { connectionInput, loginInput, publishInput } from "./validation";
-import { syncShopify, verifyShopify, verifyWhop, type ShopifyCredentials } from "./providers";
+import { syncShopify, verifyShopify, verifyWhop, sameShopifyCredentials, type ShopifyCredentials } from "./providers";
 import { accountDetails } from "../accounts";
 import { requestSite, requireSitePath } from "./hosts";
 import { calculatePaymentQuote } from "./payment-quote";
@@ -66,7 +66,7 @@ export async function handleApi(request: Request): Promise<Response> {
       const credentials = await db.credential<ShopifyCredentials>(brandId, "shopify");
       const result = await calculatePaymentQuote(brand, credentials, await body(request));
       const current = await db.credential<ShopifyCredentials>(brandId, "shopify");
-      if (current.domain !== credentials.domain || current.accessToken !== credentials.accessToken) throw new HttpError(409, "Connection changed during calculation. Request a new calculation.");
+      if (!sameShopifyCredentials(current, credentials)) throw new HttpError(409, "Connection changed during calculation. Request a new calculation.");
       return json(result);
     }
     if (!action && method === "PATCH") return json(await (await store()).updateBrand(brandId, await body(request)));
@@ -102,7 +102,7 @@ export async function handleApi(request: Request): Promise<Response> {
       const products = await syncShopify(credentials);
       return json(await db.transaction(async () => {
         const current = await db.credential<ShopifyCredentials>(brandId, "shopify");
-        if (current.domain !== credentials.domain || current.accessToken !== credentials.accessToken) throw new HttpError(409, "Connection changed during import. Sync again.");
+        if (!sameShopifyCredentials(current, credentials)) throw new HttpError(409, "Connection changed during import. Sync again.");
         const brand = await db.brand(brandId); brand.products = products;
         if (!products.some(p => p.available)) brand.status = "draft";
         brand.shopify = { ...brand.shopify, status: "verified", checkedAt: new Date().toISOString() };

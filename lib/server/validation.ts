@@ -45,7 +45,8 @@ export const brandPatch = brandInput.partial().extend({
   shippingPrice: money.optional(), freeShippingThreshold: money.optional(),
   checkoutExperience: checkoutExperienceInput.optional(),
 }).strict().refine(v => Object.keys(v).length > 0, "No changes provided");
-export const connectionInput = z.discriminatedUnion("provider", [
+export const connectionInput = z.union([
+  z.object({ provider: z.literal("shopify"), domain: shopifyDomain.refine(Boolean, "Enter your Shopify API domain"), authMethod: z.literal("client_credentials"), clientId: text(1000), clientSecret: text(1000) }).strict(),
   z.object({ provider: z.literal("shopify"), domain: shopifyDomain.refine(Boolean, "Enter your Shopify API domain"), accessToken: text(1000) }).strict(),
   z.object({ provider: z.literal("whop"), companyId: whopCompanyId.refine(Boolean, "Enter your Whop business ID"), apiKey: text(1000), webhookSecret: text(1000).optional() }).strict(),
 ]);

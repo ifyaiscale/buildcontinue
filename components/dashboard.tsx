@@ -2107,6 +2107,8 @@ function ConnectionModal({
   );
   const [secret, setSecret] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [shopifyAuth, setShopifyAuth] = useState<"client_credentials" | "access_token">("client_credentials");
+  const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -2120,7 +2122,9 @@ function ConnectionModal({
         `/api/brands/${brand.id}/connections`,
         "POST",
         provider === "shopify"
-          ? { provider, domain: account, accessToken: secret }
+          ? shopifyAuth === "client_credentials"
+            ? { provider, domain: account, authMethod: shopifyAuth, clientId, clientSecret: secret }
+            : { provider, domain: account, accessToken: secret }
           : {
               provider,
               companyId: account,
@@ -2129,6 +2133,7 @@ function ConnectionModal({
             },
       );
       setSecret("");
+      setClientId("");
       setWebhookSecret("");
       await onConnected();
     } catch (err) {
@@ -2211,8 +2216,19 @@ function ConnectionModal({
             }
           />
         </label>
+        {provider === "shopify" && <>
+          <label className="field">Shopify connection method
+            <select disabled={!enabled || saving} value={shopifyAuth} onChange={e => { setShopifyAuth(e.target.value as typeof shopifyAuth); setSecret(""); setError(""); }}>
+              <option value="client_credentials">Dev Dashboard app (automatic token renewal)</option>
+              <option value="access_token">Existing Admin API access token</option>
+            </select>
+          </label>
+          {shopifyAuth === "client_credentials" && <label className="field">Client ID
+            <input required disabled={!enabled || saving} autoComplete="off" value={clientId} onChange={e => setClientId(e.target.value)} />
+          </label>}
+        </>}
         <label className="field">
-          {provider === "shopify" ? "Admin API access token" : "Whop API key"}
+          {provider === "shopify" ? shopifyAuth === "client_credentials" ? "Client secret" : "Admin API access token" : "Whop API key"}
           <input
             type="password"
             autoComplete="off"
@@ -2239,7 +2255,9 @@ function ConnectionModal({
         )}
         <p className="field-hint">
           {provider === "shopify"
-            ? "Use a custom app with read_products and read_inventory access for catalog imports. Never paste your Shopify password. Live order writing is not enabled in this release."
+            ? shopifyAuth === "client_credentials"
+              ? "Install this brand’s app on its store first. The app and store must belong to the same eligible Shopify organization. Find Client ID and Client secret under the app’s Settings. Tokens renew automatically; grant read_products and read_inventory for catalog import."
+              : "Enter an existing Admin API access token, not a Client secret. This method does not renew expiring tokens. Grant read_products and read_inventory for catalog import."
             : "Use an API key scoped to this brand’s Whop business. Verification does not move funds or change payouts."}
         </p>
         {error && (
