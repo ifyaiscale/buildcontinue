@@ -2,6 +2,23 @@
 
 Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Active launch plan — owner requests continuous progress
+
+Definition of done: a real customer can arrive from a brand storefront, choose products/options, pay the correct USD total through Whop, receive confirmation, and have exactly one paid Shopify order containing fulfillment details. A deployed dashboard or a successful connection alone is not completion. Every progress update should state completed work, the next action, and any concrete owner-only blocker; do not repeatedly hand back generic instructions or request already-authorized implementation/deployment approval.
+
+Read-only production check on 2026-09-11: COZYINFANTS Shopify verified, five imported products, Whop not connected. CHEFINGS and FACEJAMAS: Shopify and Whop not connected, zero imported products. All three remain demo drafts; free shipping and $4.99 optional priority processing are saved.
+
+Launch sequence:
+1. COZYINFANTS first because its catalog is connected; reuse the completed flow for CHEFINGS and FACEJAMAS.
+2. Implement server-owned final quotes with current Shopify variants/prices/availability, free standard shipping, optional unchecked $4.99 processing once per order, and applicable taxes. No manual shipping-rate task for owner.
+3. Implement Whop sessions, durable payment attempts, signature-verified webhook inbox, independent payment verification, and retry/reconciliation.
+4. Complete exactly one Shopify order for a verified payment; retain customer/variant/priority information, recover failed sync without asking the buyer to pay again.
+5. Connect actual storefront cart and confirmation flow; preserve FACEJAMAS artwork/variant personalization through fulfillment before that brand launches.
+6. Deploy backend and workers, configure callback secrets, verify provider test-mode success/failure/cancel/retry/duplicate cases and account isolation.
+7. Present a concrete live acceptance purchase for explicit authorization, verify payment and Shopify order, then enable the customer route. Repeat account and transaction acceptance for remaining brands.
+
+Owner action now: in Limitless Connections with COZYINFANTS selected, use Connect Whop and enter the business API key only in the protected form; verify connection. This is company-read verification only, and payment-specific access must be checked during implementation. Do not request the key in chat. Code implementation can proceed while the connection is completed. Ask for further owner action only when credentials, provider approval screens, domain ownership, or a real charge require it.
+
 ## Current checkpoint — free shipping and optional priority processing
 
 Owner clarified shipping is already included in product prices. Applied and read-back verified settings on the existing COZYINFANTS, CHEFINGS and FACEJAMAS records: shippingPrice = 0, freeShippingThreshold = 0, priorityEnabled = true, priorityPrice = 4.99 USD, priorityLabel = Priority processing. Delivery copy explains free standard shipping and the optional processing fee. Other brand data and credentials were preserved.
