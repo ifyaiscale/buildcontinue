@@ -32,7 +32,7 @@ export const paymentQuoteInput = z.object({
 }).strict();
 
 const money = z.object({ amount: z.string(), currencyCode: z.literal(CHECKOUT_CURRENCY) });
-const moneyBag = z.object({ shopMoney: money, presentmentMoney: money });
+export const moneyBag = z.object({ shopMoney: money, presentmentMoney: money });
 const variantId = z.string().regex(/^gid:\/\/shopify\/ProductVariant\/[1-9]\d*$/);
 const calculationResponse = z.object({
   draftOrderCalculate: z.object({
@@ -75,7 +75,7 @@ export function usdCents(amount: string): number {
   return cents;
 }
 
-function bagCents(bag: z.infer<typeof moneyBag>) {
+export function bagCents(bag: z.infer<typeof moneyBag>) {
   const cents = usdCents(bag.presentmentMoney.amount);
   if (usdCents(bag.shopMoney.amount) !== cents) throw new HttpError(422, "Different shop and presentment prices are not supported by this preflight.");
   return cents;

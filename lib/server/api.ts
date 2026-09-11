@@ -7,6 +7,7 @@ import { syncShopify, verifyShopify, verifyWhop, sameShopifyCredentials, type Sh
 import { accountDetails } from "../accounts";
 import { requestSite, requireSitePath } from "./hosts";
 import { calculatePaymentQuote } from "./payment-quote";
+import { calculateLaunchQuote } from "./launch-quote";
 
 function publicBrand(brand: Brand): Brand {
   const { accountDetails: _accountDetails, ...publicFields } = brand;
@@ -56,17 +57,18 @@ export async function handleApi(request: Request): Promise<Response> {
     if (key && !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
     return json(await db.checkout(slug, await body(request), allowDraft, key), 201);
   }
-  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote))?$/);
+  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote|launch-quote))?$/);
   if (brandRoute) {
     const [, brandId, action] = brandRoute;
     requireAdmin(request);
-    if (action === "payment-quote" && method === "POST") {
+    if ((action === "payment-quote" || action === "launch-quote") && method === "POST") {
       requireCredentials(request); rateLimit("payment-quote", 10, 60000);
       const db = await store(); const brand = await db.brand(brandId);
       const credentials = await db.credential<ShopifyCredentials>(brandId, "shopify");
-      const result = await calculatePaymentQuote(brand, credentials, await body(request));
+      const result = await (action === "launch-quote" ? calculateLaunchQuote : calculatePaymentQuote)(brand, credentials, await body(request));
       const current = await db.credential<ShopifyCredentials>(brandId, "shopify");
       if (!sameShopifyCredentials(current, credentials)) throw new HttpError(409, "Connection changed during calculation. Request a new calculation.");
+      if (action === "launch-quote" && JSON.stringify(await db.brand(brandId)) !== JSON.stringify(brand)) throw new HttpError(409, "Brand settings or catalog changed during calculation. Request a new calculation.");
       return json(result);
     }
     if (!action && method === "PATCH") return json(await (await store()).updateBrand(brandId, await body(request)));
