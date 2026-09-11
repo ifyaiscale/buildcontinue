@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Current checkpoint — free shipping and optional priority processing
+
+Owner clarified shipping is already included in product prices. Applied and read-back verified settings on the existing COZYINFANTS, CHEFINGS and FACEJAMAS records: shippingPrice = 0, freeShippingThreshold = 0, priorityEnabled = true, priorityPrice = 4.99 USD, priorityLabel = Priority processing. Delivery copy explains free standard shipping and the optional processing fee. Other brand data and credentials were preserved.
+
+Existing checkout starts priority unchecked, allows checking/unchecking, calculates the fee once per order on the server, and itemizes it separately. Executed the shared totals function: two $29.99 items total $59.98 without priority, $64.97 with priority, and $59.98 after deselection; shipping stays zero. No new application deployment is needed for saved settings. Production Netlify deployment of the scope-refresh fix was independently verified ready at commit fa0b1ecf2dc3fd2b2427c6e56cb4a02d3fbde1c1.
+
+This decision supersedes earlier shipping-rate selection/acceptance requirements for checkout: do not send the owner through Get shipping rates as a launch prerequisite. The existing Shopify diagnostic still uses rate discovery and does not implement this live pricing policy. When implementing live quotes, use merchant-authorized free shipping and the optional processing line, calculate applicable taxes, and preserve the selection through Whop payment and Shopify fulfillment records. Live payment lifecycle remains unimplemented and disabled.
+
 ## Current checkpoint — Shopify scope refresh
 
 Owner reports COZYINFANTS verification succeeded and the app version was updated for write_draft_orders. Shipping diagnostic still reports that permission missing; the active version's required versus optional scopes have not been independently inspected. Found that permission verification reused the cached client-credentials token even after a scope release.
