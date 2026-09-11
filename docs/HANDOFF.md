@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Current checkpoint — Shopify store identity error
+
+The user corrected Netlify’s linked repository from `realecomgirl/build` to `ifyaiscale/buildcontinue`, retaining production branch `hoplite/beroia-65b17429`. Their subsequent screenshot confirms the new Client ID/Client secret form is deployed. COZYINFANTS verification now returns “Shopify account did not match the requested store.” No provider response or canonical domain has been independently observed.
+
+This shipment separates malformed Shopify identity/permissions responses from a real domain mismatch. A mismatch now shows both the validated Shopify-returned domain and entered domain to the protected administrator, and asks them to confirm ownership in Shopify Settings → Domains before re-verifying. It does not automatically accept aliases, change account mapping, save failed credentials or weaken identity checks. Added diagnostic tests; full suite passes 73 tests with one optional PostgreSQL integration test skipped. TypeScript and production build pass.
+
+Next: once this update deploys, retry COZYINFANTS verification and inspect the specific returned error. If a different domain is shown, confirm it belongs to COZYINFANTS before using it. Never request credentials in chat. Provider connection, catalog import and live payment implementation remain incomplete.
+
 ## Latest launch work — pricing diagnostic and account access (2026-09-11)
 
 The Shopify authorization shipment is published as `20542d68aeef3f375fea70e2978b76953163781a` on `hoplite/beroia-65b17429`. Its local tests and build passed. The GitHub combined status returned zero status contexts, so Netlify deployment is not yet independently confirmed.

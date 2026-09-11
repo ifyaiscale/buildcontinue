@@ -65,7 +65,10 @@ export async function shopifyGraphql(credentials: ShopifyCredentials, query: str
 export async function verifyShopify(credentials: ShopifyCredentials, additionalScopes: readonly string[] = []) {
   const data = await shopifyGraphql(credentials, `{ shop { name myshopifyDomain currencyCode } currentAppInstallation { accessScopes { handle } } }`);
   const parsed = z.object({ shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string() }), currentAppInstallation: z.object({ accessScopes: z.array(z.object({ handle: z.string() })) }) }).safeParse(data);
-  if (!parsed.success || parsed.data.shop.myshopifyDomain !== credentials.domain) throw new HttpError(422, "Shopify account did not match the requested store.");
+  if (!parsed.success) throw new HttpError(502, "Shopify returned an incomplete store identity or app-permissions response. The connection was not saved.");
+  const returnedDomain = parsed.data.shop.myshopifyDomain.toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(returnedDomain)) throw new HttpError(502, "Shopify returned an invalid store domain. The connection was not saved.");
+  if (returnedDomain !== credentials.domain.toLowerCase()) throw new HttpError(422, `Shopify identifies this store as ${returnedDomain}, but you entered ${credentials.domain}. Check that the returned domain belongs to this brand in Shopify Settings → Domains, then enter that domain and verify again. The connection was not saved.`);
   const scopes = parsed.data.currentAppInstallation.accessScopes.map(s => s.handle);
   if (!scopes.some(s => s === "read_products" || s === "write_products") || !scopes.some(s => s === "read_inventory" || s === "write_inventory")) throw new HttpError(422, "Grant read_products and read_inventory to import the product catalog safely.");
   if (additionalScopes.some(scope => !scopes.includes(scope))) throw new HttpError(422, `Grant ${additionalScopes.join(" and ")} before running this operation.`);

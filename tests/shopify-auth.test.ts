@@ -84,3 +84,17 @@ test("authenticated app connection persists encrypted credentials and preserves 
     for (const [key, value] of Object.entries(old)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 });
+
+test("store identity errors distinguish domain aliases from malformed responses without accepting a mismatch", async () => {
+  const { verifyShopify } = await import("../lib/server/providers");
+  const originalFetch = globalThis.fetch;
+  const credentials = { domain: "test.myshopify.com", accessToken: "synthetic-private-token" };
+  try {
+    globalThis.fetch = async () => Response.json({ data: { shop: { name: "Test", myshopifyDomain: "original-store.myshopify.com", currencyCode: "USD" }, currentAppInstallation: { accessScopes: [] } } });
+    await assert.rejects(verifyShopify(credentials), error => error instanceof Error && /original-store.myshopify.com/.test(error.message) && /connection was not saved/.test(error.message) && !error.message.includes(credentials.accessToken));
+    globalThis.fetch = async () => Response.json({ data: { shop: { name: "Test", myshopifyDomain: "test.myshopify.com", currencyCode: "USD" }, currentAppInstallation: null } });
+    await assert.rejects(verifyShopify(credentials), /incomplete store identity/);
+    globalThis.fetch = async () => Response.json({ data: { shop: { name: "Test", myshopifyDomain: "https://untrusted.example/", currencyCode: "USD" }, currentAppInstallation: { accessScopes: [] } } });
+    await assert.rejects(verifyShopify(credentials), /invalid store domain/);
+  } finally { globalThis.fetch = originalFetch; }
+});

@@ -261,7 +261,7 @@ test("provider verification rejects bad credentials, mismatched accounts, and un
     assert.equal(calls, 2);
     globalThis.fetch = async () => Response.json({ data: { shop: { name: "Test", myshopifyDomain: "test.myshopify.com", currencyCode: "USD" }, currentAppInstallation: { accessScopes: [{ handle: "read_products" }, { handle: "read_inventory" }] } } });
     assert.equal(await verifyShopify({ domain: "test.myshopify.com", accessToken: "key" }), "test.myshopify.com");
-    await assert.rejects(verifyShopify({ domain: "other.myshopify.com", accessToken: "key" }), /did not match/);
+    await assert.rejects(verifyShopify({ domain: "other.myshopify.com", accessToken: "key" }), /Shopify identifies this store as test\.myshopify\.com, but you entered other\.myshopify\.com/);
   } finally { globalThis.fetch = original; }
 });
 
