@@ -2,6 +2,16 @@
 
 Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Latest launch work — pricing diagnostic and account access (2026-09-11)
+
+The Shopify authorization shipment is published as `20542d68aeef3f375fea70e2978b76953163781a` on `hoplite/beroia-65b17429`. Its local tests and build passed. The GitHub combined status returned zero status contexts, so Netlify deployment is not yet independently confirmed.
+
+Connections now includes a protected **Check Shopify shipping and tax** form. After Shopify verification and product import, choose a product/quantity and a delivery address, request current shipping rates, then calculate the selected service. It uses the existing diagnostic endpoint, shows USD totals and Shopify warnings, discards stale results after edits, and creates no drafts, payments, or saved customer addresses. Requires `write_draft_orders` in addition to catalog permissions. Compare real results for the five launch countries before selecting the final payment flow. TypeScript and production build passed for the form.
+
+The user has successfully connected **both Netlify and Supabase in this conversation**. Do not ask them to connect again. At this checkpoint the running tool registry still contains neither provider's actions despite those confirmed connection messages. Rediscover available actions on the next resumed turn; inspect the existing Netlify project and Supabase project, not new projects. No production configuration, records, schema, or provider credentials have been modified in this workspace. Runtime secrets are absent here.
+
+The original goal remains going live as soon as possible. **Not yet complete:** durable payable quotes, reserved Shopify drafts, Whop checkout sessions, signed webhook processing, authoritative payment verification, Shopify order completion/recovery, personalization, live shopper cart handoff, and launch acceptance. Do not call this a live-payment shipment. Finish these in the existing architecture; keep real payment collection disabled until verification.
+
 ## Current shipment — Shopify app authorization (2026-09-11)
 
 The owner authorized completing the work needed to go live as soon as possible. Shopify Connections now defaults to per-brand Dev Dashboard Client ID/Client secret authorization. The server exchanges credentials, validates store identity/scopes/USD, and saves only after verification; existing encrypted storage binds credentials to the brand/provider. Tokens are cached server-side, coalesced during concurrent requests and renewed before expiry. Restarted/serverless processes acquire a fresh token automatically. Existing access-token connections remain supported. No schema migration or new environment variables are needed for this shipment.

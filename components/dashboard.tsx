@@ -1,5 +1,7 @@
 "use client";
 
+import { PricingDiagnostic } from "./pricing-diagnostic";
+
 import {
   useCallback,
   useEffect,
@@ -790,6 +792,7 @@ export function Dashboard() {
                     </section>
                   ))}
                 </div>
+                <PricingDiagnostic key={`${selected.id}:${selected.shopify.checkedAt}`} brand={selected} />
                 <div className="connection-advisory">
                   <ShieldCheck size={21} />
                   <div>
