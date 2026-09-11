@@ -11,13 +11,14 @@ export function sameShopifyCredentials(a: ShopifyCredentials, b: ShopifyCredenti
     ? b.authMethod === "client_credentials" && a.clientId === b.clientId && a.clientSecret === b.clientSecret
     : b.authMethod !== "client_credentials" && a.accessToken === b.accessToken);
 }
-async function shopifyToken(credentials: ShopifyCredentials): Promise<string> {
+async function shopifyToken(credentials: ShopifyCredentials, refresh = false): Promise<string> {
   if (credentials.authMethod !== "client_credentials") return credentials.accessToken;
   const key = createHash("sha256").update(JSON.stringify([credentials.domain, credentials.clientId, credentials.clientSecret])).digest("hex");
   const cached = tokenCache.get(key);
-  if (cached && cached.expiresAt > Date.now() + 60000) return cached.token;
   const pending = tokenRequests.get(key);
   if (pending) return pending;
+  if (!refresh && cached && cached.expiresAt > Date.now() + 60000) return cached.token;
+  if (refresh) tokenCache.delete(key);
   const request = (async () => {
     const startedAt = Date.now();
     let result: unknown;
@@ -63,6 +64,10 @@ export async function shopifyGraphql(credentials: ShopifyCredentials, query: str
 }
 
 export async function verifyShopify(credentials: ShopifyCredentials, additionalScopes: readonly string[] = []) {
+  return verifyShopifyScopes(credentials, additionalScopes, true);
+}
+
+async function verifyShopifyScopes(credentials: ShopifyCredentials, additionalScopes: readonly string[], retry: boolean): Promise<string> {
   const data = await shopifyGraphql(credentials, `{ shop { name myshopifyDomain currencyCode } currentAppInstallation { accessScopes { handle } } }`);
   const parsed = z.object({ shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string() }), currentAppInstallation: z.object({ accessScopes: z.array(z.object({ handle: z.string() })) }) }).safeParse(data);
   if (!parsed.success) throw new HttpError(502, "Shopify returned an incomplete store identity or app-permissions response. The connection was not saved.");
@@ -70,6 +75,14 @@ export async function verifyShopify(credentials: ShopifyCredentials, additionalS
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(returnedDomain)) throw new HttpError(502, "Shopify returned an invalid store domain. The connection was not saved.");
   if (returnedDomain !== credentials.domain.toLowerCase()) throw new HttpError(422, `Shopify identifies this store as ${returnedDomain}, but you entered ${credentials.domain}. Check that the returned domain belongs to this brand in Shopify Settings → Domains, then enter that domain and verify again. The connection was not saved.`);
   const scopes = parsed.data.currentAppInstallation.accessScopes.map(s => s.handle);
+  const missingCatalog = !scopes.some(s => s === "read_products" || s === "write_products") || !scopes.some(s => s === "read_inventory" || s === "write_inventory");
+  const missingAdditional = additionalScopes.some(scope => !scopes.includes(scope));
+  if ((missingCatalog || missingAdditional) && retry && credentials.authMethod === "client_credentials") {
+    // A released scope change can leave a cached token with its previous grants.
+    // Retry identity and permissions once with a newly requested token; never bypass them.
+    await shopifyToken(credentials, true);
+    return verifyShopifyScopes(credentials, additionalScopes, false);
+  }
   if (!scopes.some(s => s === "read_products" || s === "write_products") || !scopes.some(s => s === "read_inventory" || s === "write_inventory")) throw new HttpError(422, "Grant read_products and read_inventory to import the product catalog safely.");
   if (additionalScopes.some(scope => !scopes.includes(scope))) throw new HttpError(422, `Grant ${additionalScopes.join(" and ")} before running this operation.`);
   if (parsed.data.shop.currencyCode !== "USD") throw new HttpError(422, "This MVP supports USD stores only. Multi-currency pricing must be implemented before importing this store.");

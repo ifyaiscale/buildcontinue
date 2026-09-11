@@ -2,6 +2,14 @@
 
 Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Current checkpoint — Shopify scope refresh
+
+Owner reports COZYINFANTS verification succeeded and the app version was updated for write_draft_orders. Shipping diagnostic still reports that permission missing; the active version's required versus optional scopes have not been independently inspected. Found that permission verification reused the cached client-credentials token even after a scope release.
+
+Added one fresh-token retry when required catalog or operation scopes are missing. Rechecks store identity and permissions after refresh, retains strict rejection if still absent, and leaves legacy static tokens unchanged. Tests cover stale-token recovery, bounded retry, legacy behavior and identity mismatch after renewal. Full suite: 74 passed, one optional PostgreSQL test skipped; TypeScript passes. Real Shopify refresh remains owner acceptance pending.
+
+Next: after deployment, retry Get shipping rates directly; no credential re-entry needed. If still missing, inspect the active Shopify version's required Scopes and installation grant. Live payment lifecycle remains unimplemented and disabled.
+
 ## Current checkpoint — Shopify store identity error
 
 The user corrected Netlify’s linked repository from `realecomgirl/build` to `ifyaiscale/buildcontinue`, retaining production branch `hoplite/beroia-65b17429`. Their subsequent screenshot confirms the new Client ID/Client secret form is deployed. COZYINFANTS verification now returns “Shopify account did not match the requested store.” No provider response or canonical domain has been independently observed.

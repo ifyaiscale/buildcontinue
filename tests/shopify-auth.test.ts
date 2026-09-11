@@ -98,3 +98,42 @@ test("store identity errors distinguish domain aliases from malformed responses 
     await assert.rejects(verifyShopify(credentials), /invalid store domain/);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("missing scopes refresh an app token once, then enforce fresh identity and permissions", async () => {
+  const { verifyShopify } = await import("../lib/server/providers");
+  const originalFetch = globalThis.fetch;
+  let grants = 0; let queries = 0;
+  let allowDrafts = true; let mismatch = false;
+  const credentials = { ...app, clientId: "scope-refresh-client" };
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("access_token")) {
+      grants++;
+      return Response.json({ access_token: `scope-token-${grants}`, expires_in: 86400 });
+    }
+    queries++;
+    const token = new Headers(init?.headers).get("X-Shopify-Access-Token");
+    const scopes = ["read_products", "read_inventory"];
+    if (allowDrafts && token !== "scope-token-1") scopes.push("write_draft_orders");
+    return Response.json({ data: {
+      shop: { name: "Test", myshopifyDomain: mismatch && grants > 1 ? "wrong.myshopify.com" : app.domain, currencyCode: "USD" },
+      currentAppInstallation: { accessScopes: scopes.map(handle => ({ handle })) },
+    } });
+  };
+  try {
+    await verifyShopify(credentials);
+    assert.equal(grants, 1);
+    await verifyShopify(credentials, ["write_draft_orders"]);
+    assert.equal(grants, 2); assert.equal(queries, 3);
+    await verifyShopify(credentials, ["write_draft_orders"]);
+    assert.equal(grants, 2);
+    allowDrafts = false; queries = 0;
+    await assert.rejects(verifyShopify(credentials, ["write_draft_orders"]), /Grant write_draft_orders/);
+    assert.equal(grants, 3); assert.equal(queries, 2);
+    queries = 0;
+    await assert.rejects(verifyShopify({ domain: app.domain, accessToken: "legacy" }, ["write_draft_orders"]), /Grant write_draft_orders/);
+    assert.equal(grants, 3); assert.equal(queries, 1);
+    grants = 0; mismatch = true;
+    await assert.rejects(verifyShopify({ ...credentials, clientId: "scope-identity-client" }, ["write_draft_orders"]), /wrong.myshopify.com/);
+    assert.equal(grants, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
