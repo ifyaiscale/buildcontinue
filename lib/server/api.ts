@@ -8,6 +8,7 @@ import { accountDetails } from "../accounts";
 import { requestSite, requireSitePath } from "./hosts";
 import { calculatePaymentQuote } from "./payment-quote";
 import { calculateLaunchQuote } from "./launch-quote";
+import { verifyWhopWebhook } from "./whop-webhook";
 
 function publicBrand(brand: Brand): Brand {
   const { accountDetails: _accountDetails, ...publicFields } = brand;
@@ -19,6 +20,23 @@ export async function handleApi(request: Request): Promise<Response> {
   const method = request.method;
   const site = requestSite(request);
   requireSitePath(site, path);
+  const whopWebhook = path.match(/^\/api\/webhooks\/whop\/([a-zA-Z0-9_-]+)$/);
+  if (whopWebhook && method === "POST") {
+    rateLimit("whop-webhook", 600, 60000);
+    const contentLength = Number(request.headers.get("content-length") ?? "0");
+    if (Number.isFinite(contentLength) && contentLength > 65536) throw new HttpError(413, "Whop webhook payload is too large.");
+    const db = await store();
+    const brand = await db.brand(whopWebhook[1]);
+    const credentials = await db.credential<{ companyId: string; webhookSecret?: string }>(brand.id, "whop");
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, "utf8") > 65536) throw new HttpError(413, "Whop webhook payload is too large.");
+    const event = verifyWhopWebhook(rawBody, request.headers, credentials.webhookSecret ?? "");
+    const accountId = event.account_id ?? event.company_id;
+    if (!accountId || accountId !== credentials.companyId || accountId !== brand.whop.account) throw new HttpError(422, "Whop webhook account does not match this brand.");
+    const resourceId = typeof event.data.id === "string" ? event.data.id : undefined;
+    const recorded = await db.recordWebhookEvent(brand.id, { id: event.id, type: event.type, accountId, ...(resourceId ? { resourceId } : {}), receivedAt: new Date().toISOString() });
+    return json({ received: true, duplicate: recorded.duplicate });
+  }
   if (path === "/api/auth/csrf" && method === "GET") {
     const challenge = csrfChallenge(request);
     return json({ token: challenge.token }, 200, challenge.cookie ? { "Set-Cookie": challenge.cookie } : {});

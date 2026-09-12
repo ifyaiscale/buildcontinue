@@ -35,6 +35,8 @@ export class SqliteDatabase implements Database {
       CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS credentials (brand_id TEXT NOT NULL, provider TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (brand_id, provider));
       CREATE TABLE IF NOT EXISTS idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS payment_attempts (id TEXT PRIMARY KEY, brand_id TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS webhook_events (id TEXT PRIMARY KEY, brand_id TEXT NOT NULL, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
   }
 
@@ -97,12 +99,12 @@ export class PostgresDatabase implements Database {
   private async checkSchema() {
     try {
       const result = await this.pool.query("SELECT value FROM limitless.metadata WHERE key = 'schema_version'");
-      if (result.rows[0]?.value !== "1") throw new Error();
+      if (result.rows[0]?.value !== "2") throw new Error();
     } catch { throw new HttpError(503, "Database unavailable or not initialized. Verify the connection and run the database migration."); }
   }
   private sql(sql: string) {
     let index = 0;
-    return sql.replace(/\?/g, () => `$${++index}`).replace(/\b(FROM|INTO|UPDATE) (brands|orders|activity|credentials|idempotency|metadata)\b/g, "$1 limitless.$2");
+    return sql.replace(/\?/g, () => `$${++index}`).replace(/\b(FROM|INTO|UPDATE) (brands|orders|activity|credentials|idempotency|payment_attempts|webhook_events|metadata)\b/g, "$1 limitless.$2");
   }
   async all(sql: string, ...values: string[]): Promise<Row[]> {
     await this.ready;

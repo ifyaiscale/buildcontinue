@@ -96,6 +96,14 @@ export class Store {
     if (!row) throw new HttpError(409, `Connect ${provider} first.`);
     return JSON.parse(decrypt(row.data as string, `${brandId}:${provider}`));
   }
+  async recordWebhookEvent(brandId: string, event: { id: string; type: string; accountId: string; resourceId?: string; receivedAt: string }) {
+    return this.transaction(async () => {
+      const existing = await this.database.get("SELECT data FROM webhook_events WHERE id = ?", event.id);
+      if (existing) return { duplicate: true } as const;
+      await this.database.run("INSERT INTO webhook_events (id, brand_id, data) VALUES (?, ?, ?)", event.id, brandId, JSON.stringify(event));
+      return { duplicate: false } as const;
+    });
+  }
   async publish(brandId: string, mode: "demo" | "live") {
     if (mode === "live") throw new HttpError(409, "Live checkout is not enabled. Payment authorization, signed webhooks, idempotent Shopify order synchronization, taxes, inventory, shipping, and provider policy approval must be completed first. Publish a demo instead.");
     return this.transaction(async () => {

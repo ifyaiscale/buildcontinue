@@ -20,6 +20,7 @@ async function main() {
       let failed = false;
       try {
         await client.query(await readFile(new URL("../migrations/001_supabase.sql", import.meta.url), "utf8"));
+        await client.query(await readFile(new URL("../migrations/002_payment_foundation.sql", import.meta.url), "utf8"));
         console.log("Private database schema initialized. No sample or existing records were imported.");
       } catch (error) {
         try { await client.query("ROLLBACK"); } catch { failed = true; }

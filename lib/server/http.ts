@@ -16,6 +16,16 @@ export function route(handler: (request: Request) => Promise<Response>) {
     }
   };
 }
+export function signedProviderRoute(handler: (request: Request) => Promise<Response>) {
+  return async (request: Request) => {
+    try { return await handler(request); }
+    catch (error) {
+      if (error instanceof HttpError) return json({ error: error.message }, error.status);
+      if (error instanceof ZodError) return json({ error: error.issues.map(i => `${i.path.join(".") || "Input"}: ${i.message}`).join("; ") }, 422);
+      return json({ error: "The request could not be completed. Please try again." }, 500);
+    }
+  };
+}
 export async function body(request: Request) {
   const reader = request.body?.getReader();
   if (!reader) throw new HttpError(400, "A JSON body is required.");

@@ -1,6 +1,16 @@
 # Limitless Checkout — current handoff
 
-Last updated: 2026-09-11. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
+Last updated: 2026-09-12. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
+
+## Current shipment — durable payment and Whop webhook foundation (2026-09-12)
+
+Added private `payment_attempts` and `webhook_events` tables as schema version 2. The production Supabase migration was applied and read back successfully; both tables have RLS enabled and `anon`/`authenticated` have no table access. Supabase's security advisor reports the expected informational no-policy notices for these intentionally server-only tables. Its performance advisor also reports the new indexes as unused because no payments have been accepted yet, plus the pre-existing missing `orders.brand_id` index.
+
+Added a public per-brand Whop webhook route that bypasses browser CSRF checks only at the route wrapper, then requires Standard Webhooks HMAC-SHA256 verification over the exact raw body. It enforces the frozen Whop signature headers, five-minute timestamp tolerance, matching header/body event IDs, v1 envelopes, a 64 KiB limit, matching connected Whop account, and transactional event-ID deduplication. Stored webhook records contain only routing/audit identifiers and never the full customer/payment payload. The route records events but does not fulfill orders yet.
+
+TypeScript and the production build pass, including the new dynamic webhook route. A focused runtime test was added, but the normal TS test loader remains blocked on this Windows host by `uv_os_get_passwd ENOMEM`; an attempted alternate esbuild runner was blocked by the filesystem sandbox. No assertion failure occurred. Live checkout remains disabled.
+
+Next: create immutable payment attempts and Shopify drafts, create per-attempt Whop checkout configurations with exact USD totals and metadata, independently retrieve successful payments, then add exactly-once draft completion and recovery. Configure each connected Whop business's webhook secret privately after the deployed endpoint exists; do not request secrets in chat. Run signed test deliveries before any real charge.
 
 ## Active launch plan — owner requests continuous progress
 
