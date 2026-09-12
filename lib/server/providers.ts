@@ -29,7 +29,8 @@ async function shopifyToken(credentials: ShopifyCredentials, refresh = false): P
         // serialize URLSearchParams consistently when forwarding the request.
         body: new URLSearchParams({ grant_type: "client_credentials", client_id: credentials.clientId, client_secret: credentials.clientSecret }).toString(),
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       throw new HttpError(422, "Shopify app authorization failed. Confirm the app is installed on this store, both belong to the same eligible Shopify organization, and the Client ID and Client secret are correct.");
     }
     const parsed = z.object({ access_token: z.string().min(1).max(2000), expires_in: z.number().int().min(61).max(86400) }).safeParse(result);
