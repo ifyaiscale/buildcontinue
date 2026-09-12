@@ -51,7 +51,7 @@ async function remote(url: string, init: RequestInit) {
   catch { throw new HttpError(502, "Provider could not be reached. Check your account details and try again."); }
   if (response.status === 401 || response.status === 403) throw new HttpError(422, "Provider rejected these credentials or permissions. Check the API key and required scopes.");
   if (response.status === 429) throw new HttpError(429, "Provider rate limit reached. Try again shortly.");
-  if (!response.ok) throw new HttpError(502, "Provider verification failed. Check the account identifier and try again.");
+  if (!response.ok) throw new HttpError(502, `Provider verification failed (HTTP ${response.status}). Check the account identifier and try again.`);
   try { return await response.json(); }
   catch { throw new HttpError(502, "Provider returned an invalid response."); }
 }
