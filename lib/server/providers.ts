@@ -74,11 +74,11 @@ export async function shopifyGraphql(credentials: ShopifyCredentials, query: str
   return result.data;
 }
 
-export async function verifyShopify(credentials: ShopifyCredentials, additionalScopes: readonly string[] = []) {
-  return verifyShopifyScopes(credentials, additionalScopes, true);
+export async function verifyShopify(credentials: ShopifyCredentials, additionalScopes: readonly string[] = [], requiredCurrency?: "USD") {
+  return verifyShopifyScopes(credentials, additionalScopes, true, requiredCurrency);
 }
 
-async function verifyShopifyScopes(credentials: ShopifyCredentials, additionalScopes: readonly string[], retry: boolean): Promise<string> {
+async function verifyShopifyScopes(credentials: ShopifyCredentials, additionalScopes: readonly string[], retry: boolean, requiredCurrency?: "USD"): Promise<string> {
   const data = await shopifyGraphql(credentials, `{ shop { name myshopifyDomain currencyCode } currentAppInstallation { accessScopes { handle } } }`);
   const parsed = z.object({ shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string() }), currentAppInstallation: z.object({ accessScopes: z.array(z.object({ handle: z.string() })) }) }).safeParse(data);
   if (!parsed.success) throw new HttpError(502, "Shopify returned an incomplete store identity or app-permissions response. The connection was not saved.");
@@ -92,11 +92,11 @@ async function verifyShopifyScopes(credentials: ShopifyCredentials, additionalSc
     // A released scope change can leave a cached token with its previous grants.
     // Retry identity and permissions once with a newly requested token; never bypass them.
     await shopifyToken(credentials, true);
-    return verifyShopifyScopes(credentials, additionalScopes, false);
+    return verifyShopifyScopes(credentials, additionalScopes, false, requiredCurrency);
   }
   if (!scopes.some(s => s === "read_products" || s === "write_products") || !scopes.some(s => s === "read_inventory" || s === "write_inventory")) throw new HttpError(422, "Grant read_products and read_inventory to import the product catalog safely.");
   if (additionalScopes.some(scope => !scopes.includes(scope))) throw new HttpError(422, `Grant ${additionalScopes.join(" and ")} before running this operation.`);
-  if (parsed.data.shop.currencyCode !== "USD") throw new HttpError(422, "This MVP supports USD stores only. Multi-currency pricing must be implemented before importing this store.");
+  if (requiredCurrency && parsed.data.shop.currencyCode !== requiredCurrency) throw new HttpError(422, `This connection is verified, but catalog import currently requires a ${requiredCurrency} Shopify store. Multi-currency pricing must be completed before importing this catalog.`);
   return credentials.domain;
 }
 
@@ -115,7 +115,7 @@ const variantSchema = z.object({
 });
 
 export async function syncShopify(credentials: ShopifyCredentials): Promise<Product[]> {
-  await verifyShopify(credentials);
+  await verifyShopify(credentials, [], "USD");
   const products: Product[] = []; let cursor: string | null = null;
   for (let page = 0; page < 20; page++) {
     const data = await shopifyGraphql(credentials, `query Catalog($after: String) { productVariants(first: 100, after: $after, query: "product_status:active") { nodes { id title price compareAtPrice inventoryQuantity inventoryPolicy inventoryItem { tracked } image { url } product { title description status featuredImage { url } } } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
