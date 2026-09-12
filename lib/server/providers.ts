@@ -24,8 +24,10 @@ async function shopifyToken(credentials: ShopifyCredentials, refresh = false): P
     let result: unknown;
     try {
       result = await remote(`https://${credentials.domain}/admin/oauth/access_token`, {
-        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ grant_type: "client_credentials", client_id: credentials.clientId, client_secret: credentials.clientSecret }),
+        method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        // Send a plain encoded body. Some serverless fetch adapters do not
+        // serialize URLSearchParams consistently when forwarding the request.
+        body: new URLSearchParams({ grant_type: "client_credentials", client_id: credentials.clientId, client_secret: credentials.clientSecret }).toString(),
       });
     } catch {
       throw new HttpError(422, "Shopify app authorization failed. Confirm the app is installed on this store, both belong to the same eligible Shopify organization, and the Client ID and Client secret are correct.");
