@@ -9,7 +9,7 @@ import { requestSite, requireSitePath } from "./hosts";
 import { calculatePaymentQuote } from "./payment-quote";
 import { calculateLaunchQuote } from "./launch-quote";
 import { verifyWhopWebhook } from "./whop-webhook";
-import { startPayment, reconcilePayment } from "./payment-service";
+import { startPayment, reconcilePayment, whopPaymentReference } from "./payment-service";
 import { z } from "zod";
 
 function publicBrand(brand: Brand): Brand {
@@ -37,7 +37,9 @@ export async function handleApi(request: Request): Promise<Response> {
     if (!accountId || accountId !== credentials.companyId || accountId !== brand.whop.account) throw new HttpError(422, "Whop webhook account does not match this brand.");
     const resourceId = typeof event.data.id === "string" ? event.data.id : undefined;
     const recorded = await db.recordWebhookEvent(brand.id, { id: event.id, type: event.type, accountId, ...(resourceId ? { resourceId } : {}), receivedAt: new Date().toISOString() });
-    return json({ received: true, duplicate: recorded.duplicate });
+    const payment = whopPaymentReference(event);
+    if (payment) await reconcilePayment(db, brand.id, payment.attemptId, payment.paymentId);
+    return json({ received: true, duplicate: recorded.duplicate, processed: Boolean(payment) });
   }
   if (path === "/api/auth/csrf" && method === "GET") {
     const challenge = csrfChallenge(request);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../lib/server/store";
-import { startPayment, reconcilePayment } from "../lib/server/payment-service";
+import { startPayment, reconcilePayment, whopPaymentReference } from "../lib/server/payment-service";
 const bag = (amount: string) => ({ shopMoney: { amount, currencyCode: "USD" }, presentmentMoney: { amount, currencyCode: "USD" } });
 
 test("payment service reserves, creates checkout, verifies and completes once; saved customer context is encrypted", async () => {
@@ -62,4 +62,12 @@ test("payment service reserves, creates checkout, verifies and completes once; s
     if (oldKey === undefined) delete process.env.CREDENTIAL_ENCRYPTION_KEY; else process.env.CREDENTIAL_ENCRYPTION_KEY = oldKey;
     if (oldGate === undefined) delete process.env.PAYMENT_ACCEPTANCE_ENABLED; else process.env.PAYMENT_ACCEPTANCE_ENABLED = oldGate;
   }
+});
+
+test("Whop succeeded events route only tagged Limitless payments", () => {
+  const attemptId = "attempt_12345678-1234-1234-1234-123456789abc";
+  assert.deepEqual(whopPaymentReference({ type: "payment.succeeded", data: { id: "pay_123", metadata: { limitless_attempt_id: attemptId } } }), { paymentId: "pay_123", attemptId });
+  assert.equal(whopPaymentReference({ type: "payment.failed", data: { id: "pay_123", metadata: { limitless_attempt_id: attemptId } } }), null);
+  assert.equal(whopPaymentReference({ type: "payment.succeeded", data: { id: "pay_123", metadata: {} } }), null);
+  assert.throws(() => whopPaymentReference({ type: "payment.succeeded", data: { id: "bad", metadata: { limitless_attempt_id: attemptId } } }));
 });

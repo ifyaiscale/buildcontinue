@@ -66,3 +66,14 @@ export async function reconcilePayment(db: Store, brandId: string, attemptId: st
   attempt = await ledger.complete(brandId, attemptId, order.id, attempt.completionLease!.token);
   return { state: attempt.state, orderId: attempt.orderId };
 }
+
+export function whopPaymentReference(event: { type: string; data: Record<string, unknown> }) {
+  if (event.type !== "payment.succeeded") return null;
+  const paymentId = event.data.id;
+  const metadata = event.data.metadata;
+  const attemptId = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>).limitless_attempt_id : undefined;
+  if (typeof paymentId !== "string" || !/^pay_[A-Za-z0-9]+$/.test(paymentId)) throw new HttpError(422, "Whop succeeded event has no valid payment ID.");
+  if (typeof attemptId !== "string" || !/^attempt_[0-9a-f-]{36}$/.test(attemptId)) return null;
+  return { paymentId, attemptId };
+}
