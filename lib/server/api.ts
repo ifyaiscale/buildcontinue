@@ -9,6 +9,8 @@ import { requestSite, requireSitePath } from "./hosts";
 import { calculatePaymentQuote } from "./payment-quote";
 import { calculateLaunchQuote } from "./launch-quote";
 import { verifyWhopWebhook } from "./whop-webhook";
+import { startPayment, reconcilePayment } from "./payment-service";
+import { z } from "zod";
 
 function publicBrand(brand: Brand): Brand {
   const { accountDetails: _accountDetails, ...publicFields } = brand;
@@ -75,10 +77,19 @@ export async function handleApi(request: Request): Promise<Response> {
     if (key && !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
     return json(await db.checkout(slug, await body(request), allowDraft, key), 201);
   }
-  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote|launch-quote))?$/);
+  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote|launch-quote|payment-start|payment-reconcile))?$/);
   if (brandRoute) {
     const [, brandId, action] = brandRoute;
     requireAdmin(request);
+    if (action === "payment-start" && method === "POST") {
+      requireCredentials(request); rateLimit("payment-start", 10, 60000);
+      return json(await startPayment(await store(), brandId, await body(request), request.headers.get("idempotency-key") ?? "", `${site.origin}/`));
+    }
+    if (action === "payment-reconcile" && method === "POST") {
+      requireCredentials(request); rateLimit("payment-reconcile", 20, 60000);
+      const input = z.object({ attemptId: z.string().regex(/^attempt_[a-zA-Z0-9-]+$/), paymentId: z.string().regex(/^pay_[a-zA-Z0-9]+$/) }).strict().parse(await body(request));
+      return json(await reconcilePayment(await store(), brandId, input.attemptId, input.paymentId));
+    }
     if ((action === "payment-quote" || action === "launch-quote") && method === "POST") {
       requireCredentials(request); rateLimit("payment-quote", 10, 60000);
       const db = await store(); const brand = await db.brand(brandId);

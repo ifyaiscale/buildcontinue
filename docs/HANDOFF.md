@@ -1,6 +1,14 @@
 # Limitless Checkout — current handoff
 
-Last updated: 2026-09-12. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
+Last updated: 2026-09-13. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
+
+## Administrator payment acceptance shipment — 2026-09-13
+
+Added an admin-only, default-disabled payment path that turns a fresh Shopify quote into an inventory-reserved draft order, creates one exact-value Whop checkout, independently verifies the returned Whop payment, and completes the original Shopify draft once. Customer email, delivery address and quote context are encrypted in the existing private payment-attempt record. Attempts retain immutable Shopify/Whop account bindings, cart totals, checkout IDs and order IDs. Retries recover the uniquely tagged original draft and reuse the original checkout; uncertain outcomes fail closed rather than creating replacement drafts or orders. A short completion lease coordinates concurrent reconciliation, and a second successful payment enters review.
+
+The protected Connections diagnostic now accepts an administrator email after a valid quote, prepares the Whop payment link, and reconciles a supplied Whop payment ID. The server still requires `PAYMENT_ACCEPTANCE_ENABLED=true`; it is deliberately unset in production until a controlled live acceptance purchase. The public checkout remains disabled. Webhook receipt is durable and signature verified, but automatic webhook-to-order processing, shopper cart handoff, customer confirmation, and FACEJAMAS line-item personalization remain launch work.
+
+Verification: 90 tests passed, one optional isolated PostgreSQL integration test skipped; TypeScript, diff validation and the production Next.js build passed. Tests cover encrypted context, idempotent draft/checkout creation, exact account/amount matching, changed-draft rejection, recovery ambiguity, concurrent completion, and completed-order retry. These are synthetic provider tests; no real Whop charge or Shopify order was created.
 
 ## Verification recovery — 2026-09-13
 

@@ -42,7 +42,7 @@ const query = `mutation LimitlessLaunchPricing($input: DraftOrderInput!) {
 }`;
 
 // Snapshot only. Reservation and durable quote binding must precede payment creation.
-export async function calculateLaunchQuote(brand: Brand, credentials: ShopifyCredentials, input: unknown) {
+export async function prepareLaunchQuote(brand: Brand, credentials: ShopifyCredentials, input: unknown) {
   const request = launchQuoteInput.parse(input);
   if (brand.shopify.status !== "verified" || brand.shopify.account !== credentials.domain) throw new HttpError(409, "Verify this brand's Shopify connection first.");
   if (brand.shippingPrice !== 0 || brand.freeShippingThreshold !== 0) throw new HttpError(409, "This launch calculation requires the saved free standard shipping policy.");
@@ -73,12 +73,13 @@ export async function calculateLaunchQuote(brand: Brand, credentials: ShopifyCre
     title: "Priority processing", quantity: 1, requiresShipping: false, taxable: true,
     originalUnitPriceWithCurrency: { amount: "4.99", currencyCode: CHECKOUT_CURRENCY },
   };
-  const parsed = responseSchema.safeParse(await shopifyGraphql(credentials, query, { input: {
+  const draftInput = {
     lineItems: [...lineItems, ...(request.priority ? [priorityLine] : [])],
     shippingAddress: request.shippingAddress, presentmentCurrencyCode: CHECKOUT_CURRENCY,
     acceptAutomaticDiscounts: false, allowDiscountCodesInCheckout: false, taxExempt: false,
     shippingLine: { title: "Free standard shipping", priceWithCurrency: { amount: "0.00", currencyCode: CHECKOUT_CURRENCY } },
-  } }));
+  };
+  const parsed = responseSchema.safeParse(await shopifyGraphql(credentials, query, { input: draftInput }));
   if (!parsed.success) throw new HttpError(502, "Shopify returned an incomplete or unsupported launch calculation.");
   const { calculatedDraftOrder: draft, userErrors } = parsed.data.draftOrderCalculate;
   if (userErrors.length || !draft) throw new HttpError(422, "Shopify could not calculate this cart. Check the address and draft-order access.");
@@ -95,9 +96,15 @@ export async function calculateLaunchQuote(brand: Brand, credentials: ShopifyCre
   const expectedTotal = subtotalCents + priorityCents + (draft.taxesIncluded ? 0 : taxCents);
   if (!Number.isSafeInteger(subtotalCents) || !Number.isSafeInteger(expectedTotal) || shippingCents !== 0 || discountCents !== 0 || bagCents(draft.subtotalPriceSet) !== subtotalCents + priorityCents || totalCents !== expectedTotal || !draft.shippingLine || draft.shippingLine.title !== "Free standard shipping" || draft.shippingLine.shippingRateHandle !== null) throw new HttpError(422, "Shopify totals do not match the free shipping and priority processing policy.");
   return {
+    draftInput,
     mode: "diagnostic" as const, paymentReady: false as const, status: "calculated" as const,
     currency: CHECKOUT_CURRENCY, calculatedAt: new Date().toISOString(),
     totals: { subtotalCents, priorityCents, shippingCents, taxCents, discountCents, totalCents, taxesIncluded: draft.taxesIncluded },
     limitations: ["Current calculation only; inventory is not reserved and this is not a payable quote.", "Priority processing is sent to Shopify as a taxable service; store-specific tax acceptance is still required.", "No payment or Shopify order is created."],
   };
+}
+
+export async function calculateLaunchQuote(brand: Brand, credentials: ShopifyCredentials, input: unknown) {
+  const { draftInput: _draftInput, ...quote } = await prepareLaunchQuote(brand, credentials, input);
+  return quote;
 }

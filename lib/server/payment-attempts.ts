@@ -7,6 +7,8 @@ export type PaymentAttempt = {
   totalCents: number; currency: "USD"; expiresAt: number;
   state: "prepared" | "draft_pending" | "draft_ready" | "checkout_ready" | "paid" | "completed" | "review";
   draftId?: string; checkoutId?: string; paymentId?: string; orderId?: string;
+  encryptedContext?: string; purchaseUrl?: string;
+  completionLease?: { token: string; expiresAt: number };
 };
 
 // Every mutation uses the database's cross-process transaction lock. Provider calls
@@ -22,7 +24,7 @@ export class PaymentAttempts {
     await this.db.run("UPDATE payment_attempts SET data = ? WHERE id = ? AND brand_id = ?", JSON.stringify(value), value.id, value.brandId);
     return value;
   }
-  async prepare(input: { brandId: string; key: string; shopifyDomain: string; whopCompanyId: string; totalCents: number; cartFingerprint: string }, now = Date.now()) {
+  async prepare(input: { brandId: string; key: string; shopifyDomain: string; whopCompanyId: string; totalCents: number; cartFingerprint: string; encryptedContext?: string }, now = Date.now()) {
     if (!/^[A-Za-z0-9_-]{8,100}$/.test(input.key) || !Number.isSafeInteger(input.totalCents) || input.totalCents < 50 || input.totalCents > 10_000_000) throw new HttpError(422, "Invalid payment attempt.");
     const fingerprint = createHash("sha256").update(JSON.stringify([input.shopifyDomain, input.whopCompanyId, input.totalCents, input.cartFingerprint])).digest("hex");
     const key = `payment:${input.brandId}:${input.key}`;
@@ -33,6 +35,7 @@ export class PaymentAttempts {
         return this.get(input.brandId, JSON.parse(prior.data as string).id);
       }
       const attempt: PaymentAttempt = { id: `attempt_${randomUUID()}`, brandId: input.brandId, fingerprint, shopifyDomain: input.shopifyDomain, whopCompanyId: input.whopCompanyId, totalCents: input.totalCents, currency: "USD", expiresAt: now + 15 * 60_000, state: "prepared" };
+      if (input.encryptedContext) attempt.encryptedContext = input.encryptedContext;
       await this.db.run("INSERT INTO payment_attempts (id, brand_id, data) VALUES (?, ?, ?)", attempt.id, attempt.brandId, JSON.stringify(attempt));
       await this.db.run("INSERT INTO idempotency (key, fingerprint, data) VALUES (?, ?, ?)", key, fingerprint, JSON.stringify({ id: attempt.id }));
       return attempt;
@@ -54,13 +57,13 @@ export class PaymentAttempts {
       return this.save({ ...attempt, draftId, state: "draft_ready" });
     });
   }
-  async bindCheckout(brandId: string, id: string, checkoutId: string, now = Date.now()) {
+  async bindCheckout(brandId: string, id: string, checkoutId: string, now = Date.now(), purchaseUrl?: string) {
     if (!/^ch_[A-Za-z0-9]+$/.test(checkoutId)) throw new HttpError(422, "Invalid Whop checkout.");
     return this.db.transaction(async () => {
       const attempt = await this.get(brandId, id);
       if (attempt.checkoutId === checkoutId) return attempt;
       if (attempt.state !== "draft_ready" || attempt.expiresAt <= now) throw new HttpError(409, "Payment attempt cannot accept a checkout.");
-      return this.save({ ...attempt, checkoutId, state: "checkout_ready" });
+      return this.save({ ...attempt, checkoutId, purchaseUrl, state: "checkout_ready" });
     });
   }
   async acceptVerifiedPayment(brandId: string, id: string, paymentId: string, now = Date.now()) {
@@ -80,11 +83,19 @@ export class PaymentAttempts {
       return this.save({ ...attempt, paymentId, state: "paid" });
     });
   }
-  async complete(brandId: string, id: string, orderId: string) {
+  async claimCompletion(brandId: string, id: string, now = Date.now()) {
+    return this.db.transaction(async () => {
+      const attempt = await this.get(brandId, id);
+      if (attempt.state !== "paid" || attempt.completionLease && attempt.completionLease.expiresAt > now) throw new HttpError(409, "Order completion is already running or requires review.");
+      return this.save({ ...attempt, completionLease: { token: randomUUID(), expiresAt: now + 120_000 } });
+    });
+  }
+  async complete(brandId: string, id: string, orderId: string, leaseToken?: string) {
     if (!/^gid:\/\/shopify\/Order\/[1-9]\d*$/.test(orderId)) throw new HttpError(422, "Invalid Shopify order.");
     return this.db.transaction(async () => {
       const attempt = await this.get(brandId, id);
       if (attempt.orderId === orderId) return attempt;
+      if (attempt.completionLease && attempt.completionLease.token !== leaseToken) throw new HttpError(409, "Order completion lease changed.");
       if (attempt.state !== "paid" || attempt.orderId) throw new HttpError(409, "This attempt cannot complete another order.");
       return this.save({ ...attempt, orderId, state: "completed" });
     });
