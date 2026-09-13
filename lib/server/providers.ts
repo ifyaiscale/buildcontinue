@@ -114,6 +114,13 @@ const whopCheckoutSchema = z.object({
   plan: z.object({ id: z.string().regex(/^plan_[A-Za-z0-9]+$/), initial_price: z.number().finite(), plan_type: z.literal("one_time") }),
 });
 
+function exactWhopCents(amount: number): number {
+  const scaled = amount * 100;
+  const cents = Math.round(scaled);
+  if (amount < 0 || !Number.isSafeInteger(cents) || Math.abs(scaled - cents) > 0.000001) throw new HttpError(502, "Whop returned an unsupported USD amount.");
+  return cents;
+}
+
 export async function createWhopCheckout(credentials: WhopCredentials, input: { attemptId: string; totalCents: number; returnUrl: string }) {
   if (!Number.isSafeInteger(input.totalCents) || input.totalCents < 50 || input.totalCents > 10_000_000) throw new HttpError(422, "Payment total is outside the supported range.");
   const returnUrl = new URL(input.returnUrl);
@@ -129,7 +136,7 @@ export async function createWhopCheckout(credentials: WhopCredentials, input: { 
     }),
   });
   const parsed = whopCheckoutSchema.safeParse(result);
-  if (!parsed.success || parsed.data.company_id !== credentials.companyId || Math.round(parsed.data.plan.initial_price * 100) !== input.totalCents || parsed.data.metadata.limitless_attempt_id !== input.attemptId) throw new HttpError(502, "Whop returned a checkout that does not match this payment attempt.");
+  if (!parsed.success || parsed.data.company_id !== credentials.companyId || exactWhopCents(parsed.data.plan.initial_price) !== input.totalCents || parsed.data.metadata.limitless_attempt_id !== input.attemptId) throw new HttpError(502, "Whop returned a checkout that does not match this payment attempt.");
   const purchaseUrl = new URL(parsed.data.purchase_url, "https://whop.com");
   if (purchaseUrl.protocol !== "https:" || !/(^|\.)whop\.com$/.test(purchaseUrl.hostname)) throw new HttpError(502, "Whop returned an invalid checkout URL.");
   return { checkoutConfigurationId: parsed.data.id, planId: parsed.data.plan.id, purchaseUrl: purchaseUrl.toString() };
@@ -148,7 +155,7 @@ export async function retrieveVerifiedWhopPayment(credentials: WhopCredentials, 
   }));
   if (!parsed.success) throw new HttpError(502, "Whop returned an incomplete payment record.");
   const payment = parsed.data;
-  const matches = payment.id === input.paymentId && payment.company.id === credentials.companyId && payment.currency === "usd" && payment.total !== null && Math.round(payment.total * 100) === input.totalCents && payment.metadata.limitless_attempt_id === input.attemptId && payment.checkout_configuration_id === input.checkoutConfigurationId;
+  const matches = payment.id === input.paymentId && payment.company.id === credentials.companyId && payment.currency === "usd" && payment.total !== null && exactWhopCents(payment.total) === input.totalCents && payment.metadata.limitless_attempt_id === input.attemptId && payment.checkout_configuration_id === input.checkoutConfigurationId;
   if (!matches) throw new HttpError(409, "Whop payment does not match this checkout attempt.");
   if (payment.status !== "paid" || payment.substatus !== "succeeded") throw new HttpError(409, "Whop payment is not successfully paid.");
   return { paymentId: payment.id, paid: true as const, totalCents: input.totalCents, currency: "USD" as const };

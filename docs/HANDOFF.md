@@ -2,6 +2,12 @@
 
 Last updated: 2026-09-12. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Verification recovery — 2026-09-13
+
+Running the existing Node test runner outside the Windows sandbox resolves the previously reported ENOMEM problem. Full suite now passes 86 tests, with one optional PostgreSQL integration test skipped; TypeScript passes. Fixed the discovered regression by explicitly requiring USD in both Shopify pricing operations while retaining currency-independent account connection. Updated an obsolete authorization-error assertion. Payment verification now rejects sub-cent amounts rather than rounding them into a match; webhook verification rejects absent or unknown signature versions and requires seconds timestamps. Added regression assertions.
+
+These are tested foundation fixes, not a completed checkout. Payment attempts still lack lifecycle operations; Shopify draft creation/completion, provider recovery, customer cart handoff, real signed deliveries, and provider sandbox acceptance remain unimplemented/unverified. Do not say the system is ready for a live charge or imply background work after ending a turn.
+
 ## Current shipment — durable payment and Whop webhook foundation (2026-09-12)
 
 **Whop checkout and verification client added 2026-09-13:** server code now creates idempotent one-time USD checkout configurations with the exact cent total and immutable Limitless attempt metadata. The authoritative payment read requires `paid` + `succeeded` and independently matches payment ID, connected Whop company, USD currency, exact total, checkout-configuration ID, and attempt ID before returning a verified result. Provider responses and checkout URLs are schema/host validated. Focused synthetic tests cover request shape and rejection of amount, currency, company, metadata, checkout, and status mismatches. TypeScript passes. This client is not yet connected to the public checkout route, and live remains disabled.

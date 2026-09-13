@@ -90,7 +90,7 @@ export async function calculatePaymentQuote(brand: Brand, credentials: ShopifyCr
     return { variantId: product.variantId!, quantity: item.quantity };
   });
   if (new Set(lineItems.map(item => item.variantId)).size !== lineItems.length) throw new HttpError(422, "Duplicate variants are not supported.");
-  await verifyShopify(credentials, ["write_draft_orders"]);
+  await verifyShopify(credentials, ["write_draft_orders"], "USD");
 
   const draftInput = {
     lineItems, shippingAddress: request.shippingAddress, presentmentCurrencyCode: CHECKOUT_CURRENCY,

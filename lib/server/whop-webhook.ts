@@ -25,11 +25,11 @@ export function verifyWhopWebhook(rawBody: string, headers: Headers, secret: str
   const webhookId = header(headers, "webhook-id");
   const timestamp = header(headers, "webhook-timestamp");
   const signatureHeader = header(headers, "webhook-signature");
-  if (!/^\d{10,13}$/.test(timestamp)) throw new HttpError(400, "Invalid Whop webhook timestamp.");
-  const timestampMs = Number(timestamp) * (timestamp.length === 10 ? 1000 : 1);
+  if (!/^\d{10}$/.test(timestamp)) throw new HttpError(400, "Invalid Whop webhook timestamp.");
+  const timestampMs = Number(timestamp) * 1000;
   if (!Number.isSafeInteger(timestampMs) || Math.abs(nowMs - timestampMs) > 5 * 60 * 1000) throw new HttpError(400, "Expired Whop webhook timestamp.");
   const expected = createHmac("sha256", secret).update(`${webhookId}.${timestamp}.${rawBody}`).digest();
-  const signatures = signatureHeader.split(/\s+/).map(value => value.replace(/^v1,/, "")).filter(Boolean);
+  const signatures = signatureHeader.split(/\s+/).filter(value => /^v1,[A-Za-z0-9+/]{43}=$/.test(value)).map(value => value.slice(3));
   const valid = signatures.some(value => {
     try { const actual = Buffer.from(value, "base64"); return actual.length === expected.length && timingSafeEqual(actual, expected); }
     catch { return false; }

@@ -264,7 +264,7 @@ test("draft scope, USD currency, provider errors, and outages are checked withou
   await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /write_draft_orders/);
   assert.equal(calls.length, 1);
   calls = mockProvider({ currency: "EUR" });
-  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /USD stores only/);
+  await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /USD Shopify store/);
   assert.equal(calls.length, 1);
   mockProvider({ userErrors: [{ message: "synthetic-private-provider-error" }] });
   await assert.rejects(calculatePaymentQuote(await db.brand("brand_1"), credentials, input), /could not calculate/);

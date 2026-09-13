@@ -56,7 +56,7 @@ export async function calculateLaunchQuote(brand: Brand, credentials: ShopifyCre
     return { variantId: product.variantId!, quantity: item.quantity };
   });
   if (new Set(lineItems.map(item => item.variantId)).size !== lineItems.length) throw new HttpError(422, "Duplicate variants are not supported.");
-  await verifyShopify(credentials, ["write_draft_orders"]);
+  await verifyShopify(credentials, ["write_draft_orders"], "USD");
   const variants = variantsResponse.safeParse(await shopifyGraphql(credentials, `query LimitlessLaunchAvailability($ids: [ID!]!) {
     nodes(ids: $ids) { ... on ProductVariant { id availableForSale sellableOnlineQuantity inventoryPolicy
       inventoryItem { tracked requiresShipping } requiresComponents product { status isGiftCard requiresSellingPlan } } }

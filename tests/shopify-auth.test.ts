@@ -42,7 +42,7 @@ test("failed or malformed grants do not cache credentials or expose provider err
   const credentials = { ...app, clientId: "failed-client" };
   try {
     globalThis.fetch = async () => { calls++; return Response.json({ error: app.clientSecret }, { status: 401 }); };
-    await assert.rejects(shopifyGraphql(credentials, "{}"), error => error instanceof Error && !error.message.includes(app.clientSecret) && /installed/.test(error.message));
+    await assert.rejects(shopifyGraphql(credentials, "{}"), error => error instanceof Error && !error.message.includes(app.clientSecret) && /credentials or permissions/.test(error.message));
     globalThis.fetch = async () => { calls++; return Response.json({ access_token: "bad", expires_in: -1 }); };
     await assert.rejects(shopifyGraphql(credentials, "{}"), /expiry/);
     assert.equal(calls, 2);

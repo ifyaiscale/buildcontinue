@@ -36,5 +36,7 @@ test("Whop payment retrieval independently enforces status, company, USD total, 
       globalThis.fetch = async () => Response.json({ ...valid, ...changed });
       await assert.rejects(retrieveVerifiedWhopPayment(credentials, input), /does not match|not successfully paid/);
     }
+    globalThis.fetch = async () => Response.json({ ...valid, total: 64.969 });
+    await assert.rejects(retrieveVerifiedWhopPayment(credentials, input), /unsupported USD amount/);
   } finally { globalThis.fetch = original; }
 });

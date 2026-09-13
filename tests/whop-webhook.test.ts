@@ -25,4 +25,9 @@ test("Whop webhook verification rejects replayed, mismatched, malformed, and uns
   assert.throws(() => verifyWhopWebhook(body, signed(body, String(now / 1000), "msg_other"), secret, now), /event/);
   assert.throws(() => verifyWhopWebhook("not-json", signed("not-json"), secret, now), /payload/);
   assert.throws(() => verifyWhopWebhook(body, new Headers(), secret, now), /Missing/);
+  for (const prefix of ["v2,", ""]) {
+    const headers = signed(body);
+    headers.set("webhook-signature", headers.get("webhook-signature")!.replace("v1,", prefix));
+    assert.throws(() => verifyWhopWebhook(body, headers, secret, now), /signature/);
+  }
 });
