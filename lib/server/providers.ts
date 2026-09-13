@@ -4,6 +4,7 @@ import type { Product } from "../types";
 import { HttpError } from "./security";
 
 export type ShopifyCredentials = { domain: string; accessToken: string; authMethod?: "access_token" } | { domain: string; authMethod: "client_credentials"; clientId: string; clientSecret: string };
+export type WhopCredentials = { companyId: string; apiKey: string; webhookSecret?: string };
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 const tokenRequests = new Map<string, Promise<string>>();
 export function sameShopifyCredentials(a: ShopifyCredentials, b: ShopifyCredentials) {
@@ -105,6 +106,52 @@ export async function verifyWhop(companyId: string, apiKey: string) {
   const parsed = z.object({ id: z.string() }).safeParse(result);
   if (!parsed.success || parsed.data.id !== companyId) throw new HttpError(422, "Whop returned a different company. Check the company ID and API key.");
   return companyId;
+}
+
+const whopCheckoutSchema = z.object({
+  id: z.string().regex(/^ch_[A-Za-z0-9]+$/), company_id: z.string(), mode: z.literal("payment"),
+  currency: z.literal("usd"), purchase_url: z.string().min(1).max(2000), metadata: z.record(z.string(), z.unknown()),
+  plan: z.object({ id: z.string().regex(/^plan_[A-Za-z0-9]+$/), initial_price: z.number().finite(), plan_type: z.literal("one_time") }),
+});
+
+export async function createWhopCheckout(credentials: WhopCredentials, input: { attemptId: string; totalCents: number; returnUrl: string }) {
+  if (!Number.isSafeInteger(input.totalCents) || input.totalCents < 50 || input.totalCents > 10_000_000) throw new HttpError(422, "Payment total is outside the supported range.");
+  const returnUrl = new URL(input.returnUrl);
+  if (returnUrl.protocol !== "https:") throw new HttpError(422, "Payment return URL must use HTTPS.");
+  const amount = input.totalCents / 100;
+  const result = await remote("https://api.whop.com/api/v1/checkout_configurations", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${credentials.apiKey}`, Accept: "application/json", "Content-Type": "application/json", "Api-Version-Date": "2026-08-21-1", "Idempotency-Key": input.attemptId },
+    body: JSON.stringify({
+      account_id: credentials.companyId,
+      plan: { initial_price: amount, plan_type: "one_time", currency: "usd" },
+      mode: "payment", metadata: { limitless_attempt_id: input.attemptId }, redirect_url: returnUrl.toString(), allow_promo_codes: false,
+    }),
+  });
+  const parsed = whopCheckoutSchema.safeParse(result);
+  if (!parsed.success || parsed.data.company_id !== credentials.companyId || Math.round(parsed.data.plan.initial_price * 100) !== input.totalCents || parsed.data.metadata.limitless_attempt_id !== input.attemptId) throw new HttpError(502, "Whop returned a checkout that does not match this payment attempt.");
+  const purchaseUrl = new URL(parsed.data.purchase_url, "https://whop.com");
+  if (purchaseUrl.protocol !== "https:" || !/(^|\.)whop\.com$/.test(purchaseUrl.hostname)) throw new HttpError(502, "Whop returned an invalid checkout URL.");
+  return { checkoutConfigurationId: parsed.data.id, planId: parsed.data.plan.id, purchaseUrl: purchaseUrl.toString() };
+}
+
+const whopPaymentSchema = z.object({
+  id: z.string().regex(/^pay_[A-Za-z0-9]+$/), status: z.string().nullable(), substatus: z.string(),
+  company: z.object({ id: z.string() }), currency: z.string(), total: z.number().finite().nullable(),
+  metadata: z.record(z.string(), z.unknown()), checkout_configuration_id: z.string().nullable(),
+});
+
+export async function retrieveVerifiedWhopPayment(credentials: WhopCredentials, input: { paymentId: string; attemptId: string; checkoutConfigurationId: string; totalCents: number }) {
+  if (!/^pay_[A-Za-z0-9]+$/.test(input.paymentId)) throw new HttpError(422, "Invalid Whop payment ID.");
+  const parsed = whopPaymentSchema.safeParse(await remote(`https://api.whop.com/api/v1/payments/${encodeURIComponent(input.paymentId)}`, {
+    headers: { Authorization: `Bearer ${credentials.apiKey}`, Accept: "application/json", "Api-Version-Date": "2026-08-21-1" },
+  }));
+  if (!parsed.success) throw new HttpError(502, "Whop returned an incomplete payment record.");
+  const payment = parsed.data;
+  const matches = payment.id === input.paymentId && payment.company.id === credentials.companyId && payment.currency === "usd" && payment.total !== null && Math.round(payment.total * 100) === input.totalCents && payment.metadata.limitless_attempt_id === input.attemptId && payment.checkout_configuration_id === input.checkoutConfigurationId;
+  if (!matches) throw new HttpError(409, "Whop payment does not match this checkout attempt.");
+  if (payment.status !== "paid" || payment.substatus !== "succeeded") throw new HttpError(409, "Whop payment is not successfully paid.");
+  return { paymentId: payment.id, paid: true as const, totalCents: input.totalCents, currency: "USD" as const };
 }
 
 const variantSchema = z.object({
