@@ -2,12 +2,23 @@ import { z } from "zod";
 import type { Brand } from "../types";
 import { checkoutExperience } from "../checkout";
 import { CHECKOUT_CURRENCY } from "../markets";
+import { PERSONALIZATION_REF_PATTERN } from "./personalization";
 import { HttpError } from "./errors";
 import { bagCents, moneyBag, paymentQuoteInput } from "./payment-quote";
 import { shopifyGraphql, verifyShopify, type ShopifyCredentials } from "./providers";
 
-export const launchQuoteInput = paymentQuoteInput.omit({ shippingRateHandle: true }).extend({ priority: z.boolean().default(false) }).strict();
+const launchItem = z.object({
+  productId: z.string().trim().min(1).max(200),
+  quantity: z.number().int().min(1).max(20),
+  personalizationRef: z.string().regex(PERSONALIZATION_REF_PATTERN).optional(),
+}).strict();
+
+export const launchQuoteInput = paymentQuoteInput.omit({ shippingRateHandle: true, items: true }).extend({
+  items: z.array(launchItem).min(1).max(30).refine(items => new Set(items.map(item => item.productId)).size === items.length, "Duplicate products are not allowed"),
+  priority: z.boolean().default(false),
+}).strict();
 const variantId = z.string().regex(/^gid:\/\/shopify\/ProductVariant\/[1-9]\d*$/);
+const attributes = z.array(z.object({ key: z.string(), value: z.string() }));
 const variantsResponse = z.object({ nodes: z.array(z.object({
   id: variantId, availableForSale: z.boolean(), sellableOnlineQuantity: z.number().int(),
   inventoryPolicy: z.enum(["DENY", "CONTINUE"]), inventoryItem: z.object({ tracked: z.boolean(), requiresShipping: z.boolean() }),
@@ -23,6 +34,7 @@ const responseSchema = z.object({ draftOrderCalculate: z.object({
     lineItems: z.array(z.object({
       variant: z.object({ id: variantId }).nullable(), quantity: z.number().int().positive(),
       custom: z.boolean(), title: z.string(), requiresShipping: z.boolean(), taxable: z.boolean(),
+      customAttributes: attributes,
       originalUnitPriceSet: moneyBag, components: z.array(z.object({ quantity: z.number().int().positive() })),
     })),
   }).nullable(),
@@ -35,11 +47,19 @@ const query = `mutation LimitlessLaunchPricing($input: DraftOrderInput!) {
       subtotalPriceSet { ${bagFields} } totalShippingPriceSet { ${bagFields} }
       totalTaxSet { ${bagFields} } totalDiscountsSet { ${bagFields} } totalPriceSet { ${bagFields} }
       taxesIncluded shippingLine { title shippingRateHandle } warnings { errorCode field message }
-      lineItems { variant { id } quantity custom title requiresShipping taxable
+      lineItems { variant { id } quantity custom title requiresShipping taxable customAttributes { key value }
         originalUnitPriceSet { ${bagFields} } components { quantity } }
     }
   }
 }`;
+
+function normalizedAttributes(values: Array<{ key: string; value: string }> | undefined) {
+  return [...(values ?? [])].map(item => ({ key: item.key, value: item.value })).sort((a, b) => `${a.key}\u0000${a.value}`.localeCompare(`${b.key}\u0000${b.value}`));
+}
+
+function lineKey(line: { variantId: string; quantity: number; customAttributes?: Array<{ key: string; value: string }> }) {
+  return JSON.stringify({ variantId: line.variantId, quantity: line.quantity, customAttributes: normalizedAttributes(line.customAttributes) });
+}
 
 // Snapshot only. Reservation and durable quote binding must precede payment creation.
 export async function prepareLaunchQuote(brand: Brand, credentials: ShopifyCredentials, input: unknown) {
@@ -50,10 +70,22 @@ export async function prepareLaunchQuote(brand: Brand, credentials: ShopifyCrede
   if (request.priority && !experience.priorityEnabled) throw new HttpError(422, "Priority processing is not available.");
   const priorityCents = request.priority ? Math.round(experience.priorityPrice * 100) : 0;
   if (request.priority && (!Number.isSafeInteger(priorityCents) || priorityCents !== 499)) throw new HttpError(409, "This launch calculation requires the saved $4.99 priority processing price.");
+
+  if (brand.slug === "facejamas" && request.items.some(item => !item.personalizationRef)) {
+    throw new HttpError(422, "Every FaceJamas item needs a verified personalization before checkout.");
+  }
+  if (brand.slug !== "facejamas" && request.items.some(item => item.personalizationRef)) {
+    throw new HttpError(422, "Personalization references are only supported for FaceJamas.");
+  }
+
   const lineItems = request.items.map(item => {
     const product = brand.products.find(product => product.id === item.productId);
     if (!product?.available || !variantId.safeParse(product.variantId).success) throw new HttpError(422, "Choose available imported Shopify variants from this brand.");
-    return { variantId: product.variantId!, quantity: item.quantity };
+    return {
+      variantId: product.variantId!,
+      quantity: item.quantity,
+      ...(item.personalizationRef ? { customAttributes: [{ key: "Personalization ID", value: item.personalizationRef }] } : {}),
+    };
   });
   if (new Set(lineItems.map(item => item.variantId)).size !== lineItems.length) throw new HttpError(422, "Duplicate variants are not supported.");
   await verifyShopify(credentials, ["write_draft_orders"], "USD");
@@ -86,8 +118,12 @@ export async function prepareLaunchQuote(brand: Brand, credentials: ShopifyCrede
   if (draft.warnings.length) throw new HttpError(422, "Shopify returned pricing warnings. Resolve the cart or destination configuration before proceeding.");
   const merchandise = draft.lineItems.filter(item => item.variant !== null);
   const custom = draft.lineItems.filter(item => item.variant === null);
-  if (merchandise.length !== lineItems.length || new Set(merchandise.map(item => item.variant!.id)).size !== lineItems.length || merchandise.some(item => item.custom || !item.requiresShipping || item.components.length || !lineItems.some(expected => expected.variantId === item.variant!.id && expected.quantity === item.quantity))) throw new HttpError(422, "Shopify changed the cart or returned unsupported items.");
-  if (custom.length !== (request.priority ? 1 : 0) || custom.some(item => !item.custom || item.title !== priorityLine.title || item.quantity !== 1 || item.requiresShipping || !item.taxable || item.components.length || bagCents(item.originalUnitPriceSet) !== priorityCents)) throw new HttpError(422, "Shopify changed the priority processing charge.");
+  const expectedMerchandise = lineItems.map(lineKey).sort();
+  const actualMerchandise = merchandise.map(item => item.variant ? lineKey({ variantId: item.variant.id, quantity: item.quantity, customAttributes: item.customAttributes }) : "unsupported").sort();
+  if (merchandise.length !== lineItems.length || new Set(merchandise.map(item => item.variant!.id)).size !== lineItems.length || merchandise.some(item => item.custom || !item.requiresShipping || item.components.length) || JSON.stringify(expectedMerchandise) !== JSON.stringify(actualMerchandise)) {
+    throw new HttpError(422, "Shopify changed the cart or personalization data.");
+  }
+  if (custom.length !== (request.priority ? 1 : 0) || custom.some(item => !item.custom || item.title !== priorityLine.title || item.quantity !== 1 || item.requiresShipping || !item.taxable || item.components.length || item.customAttributes.length || bagCents(item.originalUnitPriceSet) !== priorityCents)) throw new HttpError(422, "Shopify changed the priority processing charge.");
   const subtotalCents = merchandise.reduce((sum, item) => sum + bagCents(item.originalUnitPriceSet) * item.quantity, 0);
   const shippingCents = bagCents(draft.totalShippingPriceSet);
   const taxCents = bagCents(draft.totalTaxSet);
