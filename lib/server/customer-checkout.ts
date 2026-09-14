@@ -95,7 +95,9 @@ export async function startCustomerCheckoutPayment(db: Store, slug: string, raw:
     priority: input.priority,
   }, key, returnUrl.toString(), input.confirmedTotalCents);
   return {
-    purchaseUrl: started.purchaseUrl,
+    planId: started.planId,
+    sessionId: started.sessionId,
+    returnUrl: returnUrl.toString(),
     totalCents: started.totalCents,
     currency: started.currency,
     expiresAt: started.expiresAt,
