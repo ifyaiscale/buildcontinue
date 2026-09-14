@@ -49,6 +49,29 @@ async function clientHash(req: Request) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("cf-connecting-ip") || "unknown";
   return hex(await digest(new TextEncoder().encode(`${RATE_SALT}:${ip}`)));
 }
+async function cleanupExpiredUploads(supabase: ReturnType<typeof createClient>) {
+  const now = new Date().toISOString();
+  const expired = await supabase.from("facejamas_upload_receipts")
+    .select("ref")
+    .lt("expires_at", now)
+    .is("attempt_id", null)
+    .is("order_id", null)
+    .limit(10);
+  if (!expired.error) {
+    for (const row of expired.data || []) {
+      const ref = typeof row.ref === "string" ? row.ref : "";
+      if (!/^pers_[0-9a-f-]{36}$/i.test(ref)) continue;
+      const files = await supabase.storage.from(BUCKET).list(`facejamas/${ref}`, { limit: 10 });
+      if (!files.error) {
+        const paths = (files.data || []).filter(file => /^source\.(?:jpg|png|webp)$/.test(file.name)).map(file => `facejamas/${ref}/${file.name}`);
+        if (paths.length) await supabase.storage.from(BUCKET).remove(paths);
+      }
+      await supabase.from("facejamas_upload_receipts").delete().eq("ref", ref).is("attempt_id", null).is("order_id", null);
+    }
+  }
+  const eventCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  await supabase.from("facejamas_upload_events").delete().lt("created_at", eventCutoff);
+}
 
 Deno.serve(async req => {
   const origin = req.headers.get("origin") || "";
@@ -64,6 +87,7 @@ Deno.serve(async req => {
     if (!url || !serviceKey) throw new Error("missing service configuration");
     const supabase = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
     await ensureBucket(supabase);
+    await cleanupExpiredUploads(supabase);
 
     const who = await clientHash(req);
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
