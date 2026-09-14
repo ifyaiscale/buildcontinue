@@ -7,6 +7,12 @@
   function setupMedia(){
     $$('.media-shell img,.media-shell video').forEach(el=>{
       const shell=el.closest('.media-shell');
+      const card=el.closest('[data-product]');
+      if(cfg.brandSlug==='cozyinfants' && card && el.tagName==='IMG' && /^https?:/.test(el.getAttribute('src')||'')){
+        const current=el.src;
+        const key=(card.dataset.name||'').split(' ')[0].toLowerCase();
+        if(key){el.dataset.fallback=current;el.dataset.fallbackTried='';el.src=`assets/${key}.webp`;}
+      }
       const miss=()=>{
         const fallback=el.dataset.fallback;
         if(fallback && !el.dataset.fallbackTried){
