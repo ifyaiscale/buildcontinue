@@ -123,7 +123,8 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
 
   async function continueToPayment() {
     if (!quote?.paymentEnabled || !quotedRequest || paying) return;
-    const body = JSON.stringify(quotedRequest);
+    const reviewedTotalCents = quote.totals.totalCents;
+    const body = JSON.stringify({ ...quotedRequest, confirmedTotalCents: reviewedTotalCents });
     if (paymentSubmission.current?.body !== body) paymentSubmission.current = { body, key: crypto.randomUUID() };
     setPaying(true);
     setError("");
@@ -135,6 +136,10 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Secure payment could not be started.");
+      if (!Number.isSafeInteger(result.totalCents) || result.totalCents !== reviewedTotalCents || result.currency !== "USD") {
+        setQuote(null); setQuotedRequest(null); paymentSubmission.current = null;
+        throw new Error("The checkout total changed. Review the exact total again before paying.");
+      }
       const target = new URL(String(result.purchaseUrl || ""));
       if (target.protocol !== "https:" || !/(^|\.)whop\.com$/.test(target.hostname)) throw new Error("The payment provider returned an invalid checkout link.");
       window.location.assign(target.toString());
