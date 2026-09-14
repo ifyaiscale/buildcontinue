@@ -77,10 +77,17 @@ The prepared Shopify themes contain per-brand cart drawers and checkout bridges 
 ## 2026-09-14 checkout host hotfix
 
 - Netlify HTTPS certificate was renewed to cover `checkout.chefings.com`, `checkout.cozyinfants.com`, and `checkout.facejamas.com`.
-- `CHECKOUT_ORIGINS` was confirmed absent from the deployed Netlify environment after Chefings continued returning `Site not configured`.
-- `CHECKOUT_ORIGINS` is now explicitly stored in Netlify for the production Functions runtime with the exact three branded HTTPS origins mapped to `chefings`, `cozyinfants`, and `facejamas`.
-- This handoff update intentionally triggers a fresh production deploy after the corrected Functions runtime configuration was saved.
+- `CHECKOUT_ORIGINS` writes through the Netlify connector repeatedly reported success but did not persist when the project environment was read back.
+- Production host routing now includes safe built-in defaults for the three fixed branded checkout domains while still allowing environment configuration to extend/override them; unknown hosts continue to fail closed.
+- Chefings cart handoff now reaches the branded checkout successfully at `checkout.chefings.com`.
 - Public payment remains disabled during this no-charge checkout QA.
+
+## 2026-09-14 customer checkout white-labeling
+
+- Removed customer-visible `Limitless Checkout` branding from the branded checkout experience.
+- Checkout browser titles are brand-specific: CHEFINGS, Cozy Infants, and FaceJamas each show their own `Secure checkout` title.
+- The customer footer no longer shows `Powered by Limitless Checkout`.
+- Netlify's own customer-facing badge was disabled separately in the Netlify project settings.
 
 ## Definition of done
 
