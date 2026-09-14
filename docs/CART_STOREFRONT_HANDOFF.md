@@ -48,7 +48,7 @@ Example call for COZYINFANTS:
 
 ```js
 openLimitlessCheckout({
-  checkoutOrigin: "https://<current-limitless-checkout-origin>",
+  checkoutOrigin: "https://limitlesscheckout.netlify.app",
   brandSlug: "cozyinfants",
   items: bag.map(item => ({ variantId: item.shopifyVariantId, quantity: item.quantity })),
 });
