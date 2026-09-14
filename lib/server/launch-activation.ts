@@ -36,7 +36,13 @@ function launchFingerprint(brand: Brand) {
     products,
     shippingPrice: brand.shippingPrice,
     freeShippingThreshold: brand.freeShippingThreshold,
-    priority: experience ? [experience.priorityEnabled, experience.priorityPrice, experience.priorityLabel] : null,
+    checkoutExperience: experience ? {
+      priorityEnabled: experience.priorityEnabled,
+      priorityPrice: experience.priorityPrice,
+      priorityLabel: experience.priorityLabel,
+      deliveryText: experience.deliveryText,
+      returnsText: experience.returnsText,
+    } : null,
   })).digest("hex");
 }
 
@@ -136,7 +142,7 @@ export async function recordLaunchAcceptance(db: Store, brandId: string, attempt
       orderId: attempt.orderId,
       totalCents: attempt.totalCents,
       shopifyDomain: attempt.shopifyDomain,
-      whopCompanyId: attempt.whopCompanyId,
+      whopCompanyId: attempt.whop.account,
       launchFingerprint: launchFingerprint(brand),
       acceptedAt: new Date().toISOString(),
     };
