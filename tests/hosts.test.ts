@@ -14,7 +14,7 @@ const request = (origin = first, path = "/api/checkout/aure-studio", options: Re
 const mutation = (origin: string, from: string, path = "/api/checkout/aure-studio", extra: Record<string, string> = {}) => request(origin, path, { method: "POST", headers: { origin: from, "content-type": "application/json", ...extra }, body: "{}" });
 
 async function configured(run: () => void | Promise<void>) {
-  const keys = ["NODE_ENV", "APP_URL", "CHECKOUT_ORIGINS", "ADMIN_PASSWORD", "ADMIN_PASSWORD_HASH", "SESSION_SECRET", "CREDENTIAL_ENCRYPTION_KEY"];
+  const keys = ["NODE_ENV", "APP_URL", "CHECKOUT_ORIGINS", "ADMIN_PASSWORD", "ADMIN_PASSWORD_HASH", "SESSION_SECRET", "CREDENTIAL_ENCRYPTION_KEY", "PAYMENT_ACCEPTANCE_ENABLED", "PUBLIC_PAYMENT_ENABLED"];
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   keys.forEach(key => delete process.env[key]);
   Object.assign(process.env, { NODE_ENV: "production", APP_URL: admin, CHECKOUT_ORIGINS: mappings, ADMIN_PASSWORD: "synthetic-test-password", SESSION_SECRET: "s".repeat(48) });
@@ -64,12 +64,14 @@ test("HTTPS development preview login uses the configured public origin behind a
 test("checkout origin checks reject other brands, admin origins, absent origin and cross-site submissions", async () => {
   await configured(() => {
     assert.doesNotThrow(() => checkOrigin(mutation(first, first)));
+    assert.doesNotThrow(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio/quote")));
+    assert.doesNotThrow(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio/payment-start")));
     assert.doesNotThrow(() => checkOrigin(mutation(admin, admin, "/api/brands")));
     for (const from of [second, admin, "https://evil.example", "null", ""]) assert.throws(() => checkOrigin(mutation(first, from)), /origin must match/);
-    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio", { "sec-fetch-site": "cross-site" })), /origin must match/);
-    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio", { "content-type": "text/plain" })), /application\/json/);
+    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio/quote", { "sec-fetch-site": "cross-site" })), /origin must match/);
+    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/aure-studio/payment-start", { "content-type": "text/plain" })), /application\/json/);
     assert.throws(() => checkOrigin(mutation(first, first, "/api/brands")), /not available/);
-    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/form-and-field")), /not available/);
+    assert.throws(() => checkOrigin(mutation(first, first, "/api/checkout/form-and-field/quote")), /not available/);
   });
 });
 
@@ -85,11 +87,30 @@ test("invalid host configuration fails closed instead of falling back to dashboa
   });
 });
 
-test("checkout domains allow only their own checkout pages and API", async () => {
+test("checkout domains allow only their own checkout pages and shopper APIs", async () => {
   await configured(() => {
     const site = requestSite(request());
-    for (const path of ["/", "/checkout/aure-studio", "/api/checkout/aure-studio/"]) assert.doesNotThrow(() => requireSitePath(site, path));
-    for (const path of ["/api/state", "/api/auth/status", "/api/auth/login", "/api/brands", "/checkout/form-and-field", "/api/checkout/form-and-field", "/api/checkout/aure-studio-extra"]) assert.throws(() => requireSitePath(site, path), /not available/);
+    for (const path of [
+      "/",
+      "/checkout/aure-studio",
+      "/api/checkout/aure-studio/",
+      "/api/checkout/aure-studio/quote",
+      "/api/checkout/aure-studio/payment-start",
+      "/api/checkout/aure-studio/status",
+    ]) assert.doesNotThrow(() => requireSitePath(site, path));
+    for (const path of [
+      "/api/state",
+      "/api/auth/status",
+      "/api/auth/login",
+      "/api/brands",
+      "/checkout/form-and-field",
+      "/api/checkout/form-and-field",
+      "/api/checkout/form-and-field/quote",
+      "/api/checkout/form-and-field/payment-start",
+      "/api/checkout/form-and-field/status",
+      "/api/checkout/aure-studio-extra",
+      "/api/checkout/aure-studio/reconcile",
+    ]) assert.throws(() => requireSitePath(site, path), /not available/);
   });
 });
 
@@ -105,7 +126,7 @@ test("mapped checkout APIs cannot read drafts or admin data even with a valid ad
     try {
       assert.equal((await handler(request(first, "/api/checkout/aure-studio", { headers: { cookie } }))).status, 404);
       assert.equal((await handler(request(admin, "/api/checkout/aure-studio", { headers: { cookie } }))).status, 200);
-      for (const path of ["/api/state", "/api/auth/status", "/api/checkout/form-and-field"]) assert.equal((await handler(request(first, path, { headers: { cookie } }))).status, 404);
+      for (const path of ["/api/state", "/api/auth/status", "/api/checkout/form-and-field", "/api/checkout/form-and-field/status"]) assert.equal((await handler(request(first, path, { headers: { cookie } }))).status, 404);
       await db.publish("brand_1", "demo");
       assert.equal((await handler(request())).status, 200);
       const payload = { mode: "demo", items: [{ productId: "product_1", quantity: 1 }], customer: { email: "test@example.com", firstName: "Test", lastName: "Buyer", address: "1 Example Street", city: "Portland", postalCode: "97201", country: "US" } };

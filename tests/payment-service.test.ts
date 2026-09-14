@@ -35,7 +35,7 @@ test("payment service reserves, creates checkout, verifies and completes once; s
       if (query.includes("currentAppInstallation")) return Response.json({ data: { shop: { name: "Test", myshopifyDomain: "test.myshopify.com", currencyCode: "USD" }, currentAppInstallation: { accessScopes: ["read_products", "read_inventory", "write_draft_orders"].map(handle => ({ handle })) } } });
       if (query.includes("LimitlessLaunchAvailability")) return Response.json({ data: { nodes: [{ id: variantId, availableForSale: true, sellableOnlineQuantity: 10, inventoryPolicy: "DENY", inventoryItem: { tracked: true, requiresShipping: true }, requiresComponents: false, product: { status: "ACTIVE", isGiftCard: false, requiresSellingPlan: false } }] } });
       if (query.includes("draftOrderCalculate")) return Response.json({ data: { draftOrderCalculate: { userErrors: [], calculatedDraftOrder: {
-        subtotalPriceSet: bag("10"), totalShippingPriceSet: bag("0"), totalTaxSet: bag("0"), totalDiscountsSet: bag("0"), totalPriceSet: bag("10"), taxesIncluded: false, shippingLine: { title: "Free standard shipping", shippingRateHandle: null }, warnings: [],
+        subtotalPriceSet: bag("10"), totalShippingPriceSet: bag("0"), totalTaxSet: bag("0"), totalDiscountsPriceSet: bag("0"), totalDiscountsSet: bag("0"), totalPriceSet: bag("10"), taxesIncluded: false, shippingLine: { title: "Free standard shipping", shippingRateHandle: null }, warnings: [],
         lineItems: [{ variant: { id: variantId }, quantity: 1, custom: false, title: "Product", requiresShipping: true, taxable: true, originalUnitPriceSet: bag("10"), components: [] }],
       } } } });
       if (query.includes("draftOrderCreate")) {
@@ -50,8 +50,12 @@ test("payment service reserves, creates checkout, verifies and completes once; s
       }
       return Response.json({ data: { draftOrder: persistedDraft } });
     };
-    const started = await startPayment(db, brand.id, request, "checkout_key", "https://example.com/");
-    const retried = await startPayment(db, brand.id, request, "checkout_key", "https://example.com/");
+    await assert.rejects(startPayment(db, brand.id, request, "changed_total_key", "https://example.com/", 999), /total changed/i);
+    assert.equal(creates, 0); assert.equal(checkoutCreates, 0);
+    assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM payment_attempts").get()?.n, 0);
+
+    const started = await startPayment(db, brand.id, request, "checkout_key", "https://example.com/", 1000);
+    const retried = await startPayment(db, brand.id, request, "checkout_key", "https://example.com/", 1000);
     assert.equal(started.attemptId, retried.attemptId); assert.equal(creates, 1); assert.equal(checkoutCreates, 1);
     assert.doesNotMatch(String(db.db.prepare("SELECT data FROM payment_attempts").get()!.data), /buyer@example.com|123 Example Street/);
     assert.equal((await reconcilePayment(db, brand.id, started.attemptId, "pay_test")).state, "completed");

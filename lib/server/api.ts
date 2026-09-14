@@ -11,6 +11,7 @@ import { calculateLaunchQuote } from "./launch-quote";
 import { verifyWhopWebhook } from "./whop-webhook";
 import { startPayment, reconcilePayment, whopPaymentReference } from "./payment-service";
 import { enqueuePayment } from "./payment-jobs";
+import { customerPaymentStatus, quoteCustomerCheckout, startCustomerCheckoutPayment } from "./customer-checkout";
 import { z } from "zod";
 
 function publicBrand(brand: Brand): Brand {
@@ -19,7 +20,8 @@ function publicBrand(brand: Brand): Brand {
 }
 
 export async function handleApi(request: Request): Promise<Response> {
-  const path = new URL(request.url).pathname.replace(/\/$/, "");
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/$/, "");
   const method = request.method;
   const site = requestSite(request);
   requireSitePath(site, path);
@@ -48,7 +50,6 @@ export async function handleApi(request: Request): Promise<Response> {
   }
   if (path === "/api/auth/status" && method === "GET") return json({ authenticated: authenticated(request), configured: authConfigured(), demo: demoMode() });
   if (path === "/api/auth/login" && method === "POST") {
-    // A global bucket cannot be bypassed by spoofing proxy/IP headers.
     rateLimit("login", 10, 15 * 60 * 1000);
     if (!authConfigured()) throw new HttpError(503, "Configure admin authentication before signing in.");
     const { password } = loginInput.parse(await body(request));
@@ -68,6 +69,30 @@ export async function handleApi(request: Request): Promise<Response> {
     requireAdmin(request); rateLimit("brand-create", 60, 60000);
     return json(await (await store()).createBrand(await body(request)), 201);
   }
+
+  const customerCheckout = path.match(/^\/api\/checkout\/([a-z0-9-]+)\/(quote|payment-start|status)$/);
+  if (customerCheckout) {
+    if (!authConfigured() && !demoMode()) throw new HttpError(503, "This deployment is not configured for checkout.");
+    const [, slug, action] = customerCheckout;
+    const db = await store();
+    if (action === "quote" && method === "POST") {
+      rateLimit("customer-checkout-quote", 120, 60000);
+      return json(await quoteCustomerCheckout(db, slug, await body(request)));
+    }
+    if (action === "payment-start" && method === "POST") {
+      rateLimit("customer-payment-start", 30, 60000);
+      const key = request.headers.get("idempotency-key") ?? "";
+      if (!/^[A-Za-z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
+      return json(await startCustomerCheckoutPayment(db, slug, await body(request), key, site.origin), 201);
+    }
+    if (action === "status" && method === "GET") {
+      rateLimit("customer-payment-status", 240, 60000);
+      const receipt = url.searchParams.get("receipt") ?? "";
+      return json(await customerPaymentStatus(db, slug, receipt));
+    }
+    throw new HttpError(405, "Method not allowed.");
+  }
+
   const checkout = path.match(/^\/api\/checkout\/([a-z0-9-]+)$/);
   if (checkout && (method === "GET" || method === "POST")) {
     if (!authConfigured() && !demoMode()) throw new HttpError(503, "This deployment is not configured for checkout.");
@@ -122,7 +147,6 @@ export async function handleApi(request: Request): Promise<Response> {
         };
         brand[input.provider] = { status: "verified", account, checkedAt: new Date().toISOString() };
         if (input.provider === "shopify") {
-          // Reconnecting a different catalog invalidates published product references.
           brand.products = []; brand.status = "draft";
         }
         await db.saveBrand(brand); await db.addActivity(`${brand.name}: ${input.provider} API access verified (not live payments)`, "connection", brand.id);
@@ -149,4 +173,4 @@ export async function handleApi(request: Request): Promise<Response> {
 }
 
 const handler = route(handleApi);
-export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as paymentQuote, handler as checkoutGet, handler as checkoutPost, handler as authStatus, handler as csrf, handler as login, handler as logout };
+export { handler as state, handler as addBrand, handler as editBrand, handler as connect, handler as syncProducts, handler as publish, handler as paymentQuote, handler as checkoutGet, handler as checkoutPost, handler as customerCheckout, handler as authStatus, handler as csrf, handler as login, handler as logout };

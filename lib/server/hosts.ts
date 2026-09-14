@@ -34,7 +34,6 @@ export function requestSite(request: RequestSite): Site {
   const admin = process.env.APP_URL ? parseOrigin(process.env.APP_URL) : undefined;
   if (!admin && process.env.NODE_ENV === "production") throw new HttpError(503, "Configure APP_URL with the application origin before serving requests.");
   const sites = checkoutSites(admin);
-  // The deployment proxy must preserve Host. Arbitrary forwarded-host headers are not trusted.
   const checkout = sites.get(host);
   if (checkout) return checkout;
   if (admin?.host === host) return { kind: "admin", origin: admin.origin };
@@ -46,5 +45,9 @@ export function requestSite(request: RequestSite): Site {
 
 export function requireSitePath(site: Site, pathname: string) {
   const path = pathname.replace(/\/+$/, "") || "/";
-  if (site.kind === "checkout" && !["/", `/checkout/${site.slug}`, `/api/checkout/${site.slug}`].includes(path)) throw new HttpError(404, "Page not available on this checkout domain.");
+  if (site.kind !== "checkout") return;
+  const checkoutPath = `/checkout/${site.slug}`;
+  const apiPath = `/api/checkout/${site.slug}`;
+  const allowed = ["/", checkoutPath, apiPath, `${apiPath}/quote`, `${apiPath}/payment-start`, `${apiPath}/status`];
+  if (!allowed.includes(path)) throw new HttpError(404, "Page not available on this checkout domain.");
 }
