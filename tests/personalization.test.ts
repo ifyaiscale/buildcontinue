@@ -35,7 +35,8 @@ async function fixture() {
   db.db.exec(`CREATE TABLE IF NOT EXISTS facejamas_upload_receipts (
     ref TEXT PRIMARY KEY, proof_hash TEXT NOT NULL, content_type TEXT NOT NULL,
     size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL, attempt_id TEXT, order_id TEXT, attached_at TEXT
+    created_at TEXT NOT NULL, attempt_id TEXT, order_id TEXT, attached_at TEXT,
+    order_bound_at TEXT, source_deleted_at TEXT
   )`);
   await db.database.run(
     "INSERT INTO facejamas_upload_receipts (ref, proof_hash, content_type, size_bytes, sha256, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -81,11 +82,17 @@ test("FaceJamas rejects forged proof and non-FaceJamas brands reject personaliza
 test("FaceJamas artwork can be retried by one attempt but not reused by another and binds to one Shopify order", async () => {
   const db = await fixture();
   try {
-    await claimFaceJamasPersonalizations(db, brand.id, [ref], "attempt_11111111-1111-4111-8111-111111111111", Date.parse("2026-09-14T00:00:00.000Z"));
-    await claimFaceJamasPersonalizations(db, brand.id, [ref], "attempt_11111111-1111-4111-8111-111111111111", Date.parse("2026-09-14T00:01:00.000Z"));
+    const attempt = "attempt_11111111-1111-4111-8111-111111111111";
+    const boundAt = Date.parse("2026-09-14T00:03:00.000Z");
+    await claimFaceJamasPersonalizations(db, brand.id, [ref], attempt, Date.parse("2026-09-14T00:00:00.000Z"));
+    await claimFaceJamasPersonalizations(db, brand.id, [ref], attempt, Date.parse("2026-09-14T00:01:00.000Z"));
     await assert.rejects(() => claimFaceJamasPersonalizations(db, brand.id, [ref], "attempt_22222222-2222-4222-8222-222222222222", Date.parse("2026-09-14T00:02:00.000Z")), /another checkout/i);
-    await finalizeFaceJamasPersonalizations(db, [ref], "attempt_11111111-1111-4111-8111-111111111111", "gid://shopify/Order/12345");
-    await finalizeFaceJamasPersonalizations(db, [ref], "attempt_11111111-1111-4111-8111-111111111111", "gid://shopify/Order/12345");
-    await assert.rejects(() => finalizeFaceJamasPersonalizations(db, [ref], "attempt_11111111-1111-4111-8111-111111111111", "gid://shopify/Order/99999"), /different Shopify order/i);
+    await finalizeFaceJamasPersonalizations(db, [ref], attempt, "gid://shopify/Order/12345", boundAt);
+    await finalizeFaceJamasPersonalizations(db, [ref], attempt, "gid://shopify/Order/12345", Date.parse("2026-09-14T00:04:00.000Z"));
+    const stored = await db.database.get("SELECT order_id, order_bound_at, source_deleted_at FROM facejamas_upload_receipts WHERE ref = ?", ref);
+    assert.equal(stored?.order_id, "gid://shopify/Order/12345");
+    assert.equal(stored?.order_bound_at, "2026-09-14T00:03:00.000Z");
+    assert.equal(stored?.source_deleted_at, null);
+    await assert.rejects(() => finalizeFaceJamasPersonalizations(db, [ref], attempt, "gid://shopify/Order/99999"), /different Shopify order/i);
   } finally { await db.close(); }
 });
