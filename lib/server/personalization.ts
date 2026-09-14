@@ -18,6 +18,8 @@ type Receipt = {
   expiresAt: string;
   attemptId?: string;
   orderId?: string;
+  orderBoundAt?: string;
+  sourceDeletedAt?: string;
 };
 
 function receiptTable(db: Store) {
@@ -32,7 +34,9 @@ function receiptTable(db: Store) {
       created_at TEXT NOT NULL DEFAULT '',
       attempt_id TEXT,
       order_id TEXT,
-      attached_at TEXT
+      attached_at TEXT,
+      order_bound_at TEXT,
+      source_deleted_at TEXT
     )`);
     return "facejamas_upload_receipts";
   }
@@ -71,12 +75,14 @@ function parseReceipt(row: Record<string, unknown> | undefined): Receipt | undef
     expiresAt: row.expires_at,
     ...(typeof row.attempt_id === "string" ? { attemptId: row.attempt_id } : {}),
     ...(typeof row.order_id === "string" ? { orderId: row.order_id } : {}),
+    ...(typeof row.order_bound_at === "string" ? { orderBoundAt: row.order_bound_at } : {}),
+    ...(typeof row.source_deleted_at === "string" ? { sourceDeletedAt: row.source_deleted_at } : {}),
   };
 }
 
 async function receipt(db: Store, ref: string) {
   const row = await db.database.get(
-    `SELECT ref, proof_hash, expires_at, attempt_id, order_id FROM ${receiptTable(db)} WHERE ref = ?`,
+    `SELECT ref, proof_hash, expires_at, attempt_id, order_id, order_bound_at, source_deleted_at FROM ${receiptTable(db)} WHERE ref = ?`,
     ref,
   );
   return parseReceipt(row);
@@ -113,8 +119,8 @@ export async function verifyFaceJamasCartPersonalizations(
     if (!stored || !constantHexEqual(stored.proofHash, proofHash(proof))) {
       throw new HttpError(422, "A FaceJamas photo upload could not be verified. Upload the photo again.");
     }
-    if (Date.parse(stored.expiresAt) <= now || stored.orderId || stored.attemptId) {
-      throw new HttpError(409, "That FaceJamas photo upload was already used or expired. Upload the photo again for this order.");
+    if (Date.parse(stored.expiresAt) <= now || stored.orderId || stored.attemptId || stored.sourceDeletedAt) {
+      throw new HttpError(409, "That FaceJamas photo upload was already used, deleted, or expired. Upload the photo again for this order.");
     }
     checked.set(ref, proof);
   }
@@ -150,14 +156,14 @@ export async function claimFaceJamasPersonalizations(
     const table = receiptTable(db);
     for (const ref of new Set(refs)) {
       const stored = await receipt(db, ref);
-      if (!stored || Date.parse(stored.expiresAt) <= now || stored.orderId) {
+      if (!stored || Date.parse(stored.expiresAt) <= now || stored.orderId || stored.sourceDeletedAt) {
         throw new HttpError(409, "A FaceJamas personalization is no longer available. Start checkout again with a new photo upload.");
       }
       if (stored.attemptId && stored.attemptId !== attemptId) {
         throw new HttpError(409, "A FaceJamas personalization is already bound to another checkout. Upload the photo again for a new order.");
       }
       await db.database.run(
-        `UPDATE ${table} SET attempt_id = ?, attached_at = COALESCE(attached_at, ?) WHERE ref = ? AND (attempt_id IS NULL OR attempt_id = ?)`,
+        `UPDATE ${table} SET attempt_id = ?, attached_at = COALESCE(attached_at, ?) WHERE ref = ? AND source_deleted_at IS NULL AND (attempt_id IS NULL OR attempt_id = ?)`,
         attemptId,
         new Date(now).toISOString(),
         ref,
@@ -174,15 +180,22 @@ export async function finalizeFaceJamasPersonalizations(
   refs: string[],
   attemptId: string,
   orderId: string,
+  now = Date.now(),
 ) {
   if (!refs.length) return;
   await db.transaction(async () => {
     const table = receiptTable(db);
     for (const ref of new Set(refs)) {
       const stored = await receipt(db, ref);
-      if (!stored || stored.attemptId !== attemptId) throw new HttpError(409, "FaceJamas personalization binding needs reconciliation before fulfillment.");
+      if (!stored || stored.attemptId !== attemptId || stored.sourceDeletedAt) throw new HttpError(409, "FaceJamas personalization binding needs reconciliation before fulfillment.");
       if (stored.orderId && stored.orderId !== orderId) throw new HttpError(409, "FaceJamas personalization is already bound to a different Shopify order.");
-      await db.database.run(`UPDATE ${table} SET order_id = ? WHERE ref = ? AND attempt_id = ?`, orderId, ref, attemptId);
+      await db.database.run(
+        `UPDATE ${table} SET order_id = ?, order_bound_at = COALESCE(order_bound_at, ?) WHERE ref = ? AND attempt_id = ? AND source_deleted_at IS NULL`,
+        orderId,
+        new Date(now).toISOString(),
+        ref,
+        attemptId,
+      );
       const verified = await receipt(db, ref);
       if (verified?.orderId !== orderId) throw new HttpError(409, "FaceJamas personalization could not be bound to the Shopify order.");
     }
@@ -191,15 +204,17 @@ export async function finalizeFaceJamasPersonalizations(
 
 export async function listFaceJamasFulfillmentArtwork(db: Store) {
   const rows = await db.database.all(
-    `SELECT ref, order_id, attached_at, created_at FROM ${receiptTable(db)} WHERE order_id IS NOT NULL ORDER BY attached_at DESC LIMIT 100`,
+    `SELECT ref, order_id, order_bound_at, source_deleted_at, attached_at, created_at FROM ${receiptTable(db)} WHERE order_id IS NOT NULL ORDER BY COALESCE(order_bound_at, attached_at) DESC LIMIT 100`,
   );
   return rows.flatMap(row => {
     if (typeof row.ref !== "string" || typeof row.order_id !== "string") return [];
     return [{
       personalizationRef: row.ref,
       orderId: row.order_id,
+      orderBoundAt: typeof row.order_bound_at === "string" ? row.order_bound_at : null,
       attachedAt: typeof row.attached_at === "string" ? row.attached_at : null,
       createdAt: typeof row.created_at === "string" ? row.created_at : null,
+      sourceDeletedAt: typeof row.source_deleted_at === "string" ? row.source_deleted_at : null,
     }];
   });
 }
@@ -213,6 +228,7 @@ export async function openFaceJamasArtwork(
   if (!PERSONALIZATION_REF_PATTERN.test(ref)) throw new HttpError(422, "FaceJamas personalization reference is invalid.");
   const stored = await receipt(db, ref);
   if (!stored?.orderId) throw new HttpError(409, "Artwork can only be opened after it is bound to a completed Shopify order.");
+  if (stored.sourceDeletedAt) throw new HttpError(410, "This source artwork has reached the retention limit and was deleted from private storage.");
 
   const anonKey = process.env.SUPABASE_PUBLIC_ANON_KEY?.trim();
   const endpointRaw = process.env.FACEJAMAS_ASSET_URL?.trim();
