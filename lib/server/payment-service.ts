@@ -22,14 +22,17 @@ async function connections(db: Store, brandId: string, attempt?: PaymentAttempt)
   return { brand, shopify, whop };
 }
 
-// Admin acceptance only until sandbox, callback delivery and storefront tests pass.
-export async function startPayment(db: Store, brandId: string, raw: unknown, key: string, returnUrl: string) {
+// Admin acceptance can omit expectedTotalCents. Shopper flows must pass the exact
+// cents most recently reviewed by the buyer; Shopify remains authoritative.
+export async function startPayment(db: Store, brandId: string, raw: unknown, key: string, returnUrl: string, expectedTotalCents?: number) {
   if (process.env.PAYMENT_ACCEPTANCE_ENABLED !== "true") throw new HttpError(409, "Payment acceptance testing is not enabled.");
+  if (expectedTotalCents !== undefined && (!Number.isSafeInteger(expectedTotalCents) || expectedTotalCents < 50 || expectedTotalCents > 10_000_000)) throw new HttpError(422, "Invalid reviewed payment total.");
   const input = inputSchema.parse(raw);
   const { brand, shopify, whop } = await connections(db, brandId);
   if (!whop.webhookSecret) throw new HttpError(409, "Configure and verify this brand's Whop webhook before accepting payments.");
   const { email, ...cart } = input;
   const quote = await prepareLaunchQuote(brand, shopify, cart);
+  if (expectedTotalCents !== undefined && quote.totals.totalCents !== expectedTotalCents) throw new HttpError(409, "The checkout total changed. Review the new total before paying.");
   const current = await connections(db, brandId);
   if (!sameShopifyCredentials(shopify, current.shopify) || whop.apiKey !== current.whop.apiKey || JSON.stringify(brand) !== JSON.stringify(current.brand)) throw new HttpError(409, "Store settings changed during pricing.");
   const ledger = new PaymentAttempts(db.database);
