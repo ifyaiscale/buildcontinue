@@ -4,7 +4,22 @@
   const cart=new Map();
   const $=(q,r=document)=>r.querySelector(q); const $$=(q,r=document)=>[...r.querySelectorAll(q)];
   const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
-  function setupMedia(){ $$('.media-shell img,.media-shell video').forEach(el=>{ const shell=el.closest('.media-shell'); const miss=()=>shell?.classList.add('missing'); el.addEventListener('error',miss); if(el.tagName==='IMG'&&el.complete&&el.naturalWidth===0) miss(); }); }
+  function setupMedia(){
+    $$('.media-shell img,.media-shell video').forEach(el=>{
+      const shell=el.closest('.media-shell');
+      const miss=()=>{
+        const fallback=el.dataset.fallback;
+        if(fallback && !el.dataset.fallbackTried){
+          el.dataset.fallbackTried='true';
+          el.src=fallback;
+          return;
+        }
+        shell?.classList.add('missing');
+      };
+      el.addEventListener('error',miss);
+      if(el.tagName==='IMG'&&el.complete&&el.naturalWidth===0) miss();
+    });
+  }
   function cartCount(){return [...cart.values()].reduce((s,x)=>s+x.quantity,0)}
   function cartTotal(){return [...cart.values()].reduce((s,x)=>s+x.quantity*x.price,0)}
   function refreshCart(){
