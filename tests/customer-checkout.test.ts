@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../lib/server/store";
 import { PaymentAttempts } from "../lib/server/payment-attempts";
-import { createCustomerReceipt, customerCheckoutInput, customerPaymentStatus, publicPaymentEnabled } from "../lib/server/customer-checkout";
+import { createCustomerReceipt, customerCheckoutInput, customerPaymentStartInput, customerPaymentStatus, publicPaymentEnabled } from "../lib/server/customer-checkout";
 import { handleApi } from "../lib/server/api";
 import { route } from "../lib/server/http";
 
@@ -56,16 +56,22 @@ test("shopper payment API remains locked before any provider work when public ac
   }
 });
 
-test("customer checkout input cannot inject products, prices, totals or payment identifiers", () => {
+test("customer quote input cannot inject commerce state; payment start requires only the reviewed total lock", () => {
   const shippingAddress = { firstName: "Test", lastName: "Buyer", address1: "123 Example Street", city: "Portland", zip: "97201", provinceCode: "OR", countryCode: "US" };
   const valid = { cartToken: "x".repeat(40), email: "buyer@example.com", priority: false, shippingAddress };
   assert.equal(customerCheckoutInput.safeParse(valid).success, true);
+  assert.equal(customerPaymentStartInput.safeParse({ ...valid, confirmedTotalCents: 1250 }).success, true);
+  assert.equal(customerPaymentStartInput.safeParse(valid).success, false);
+  assert.equal(customerPaymentStartInput.safeParse({ ...valid, confirmedTotalCents: 0 }).success, false);
   for (const injected of [
     { ...valid, items: [{ productId: "other", quantity: 99 }] },
     { ...valid, totalCents: 1 },
     { ...valid, price: 0 },
     { ...valid, paymentId: "pay_fake" },
-  ]) assert.equal(customerCheckoutInput.safeParse(injected).success, false);
+  ]) {
+    assert.equal(customerCheckoutInput.safeParse(injected).success, false);
+    assert.equal(customerPaymentStartInput.safeParse({ ...injected, confirmedTotalCents: 1250 }).success, false);
+  }
 });
 
 test("encrypted customer receipt resolves only its brand and idempotent attempt", async () => {
