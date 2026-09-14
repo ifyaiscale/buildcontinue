@@ -3,6 +3,7 @@ import type { Brand } from "../types";
 import type { Store } from "./store";
 import { PaymentAttempts } from "./payment-attempts";
 import type { ShopifyCredentials, WhopCredentials } from "./providers";
+import { launchPolicyStatus } from "./launch-policies";
 import { HttpError } from "./errors";
 
 const ACCEPTANCE_VERSION = 1;
@@ -29,12 +30,19 @@ function launchFingerprint(brand: Brand) {
   return createHash("sha256").update(JSON.stringify({
     brandId: brand.id,
     domain: brand.domain,
+    supportEmail: brand.supportEmail.trim().toLowerCase(),
     shopify: brand.shopify.account ?? "",
     whop: brand.whop.account ?? "",
     products,
     shippingPrice: brand.shippingPrice,
     freeShippingThreshold: brand.freeShippingThreshold,
-    priority: experience ? [experience.priorityEnabled, experience.priorityPrice, experience.priorityLabel] : null,
+    checkoutExperience: experience ? {
+      priorityEnabled: experience.priorityEnabled,
+      priorityPrice: experience.priorityPrice,
+      priorityLabel: experience.priorityLabel,
+      deliveryText: experience.deliveryText,
+      returnsText: experience.returnsText,
+    } : null,
   })).digest("hex");
 }
 
@@ -62,9 +70,23 @@ async function providerChecks(db: Store, brand: Brand) {
   };
 }
 
+function faceJamasMediaConfigured(brand: Brand) {
+  if (brand.slug !== "facejamas") return true;
+  const key = process.env.SUPABASE_PUBLIC_ANON_KEY?.trim();
+  const endpoint = process.env.FACEJAMAS_ASSET_URL?.trim();
+  if (!key || !endpoint) return false;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" && url.hostname === "ifwljlzrhfmviwhsjhpp.supabase.co" && url.pathname === "/functions/v1/facejamas-asset";
+  } catch {
+    return false;
+  }
+}
+
 export async function launchReadiness(db: Store, brandId: string) {
   const brand = await db.brand(brandId);
   const providers = await providerChecks(db, brand);
+  const policies = await launchPolicyStatus(db, brandId);
   const saved = await acceptance(db, brandId);
   let acceptedAttemptCurrent = false;
   if (saved && saved.launchFingerprint === launchFingerprint(brand) && saved.shopifyDomain === brand.shopify.account && saved.whopCompanyId === brand.whop.account) {
@@ -78,16 +100,24 @@ export async function launchReadiness(db: Store, brandId: string) {
     paymentAcceptanceEnabled: process.env.PAYMENT_ACCEPTANCE_ENABLED === "true",
     publicPaymentEnabled: process.env.PUBLIC_PAYMENT_ENABLED === "true",
     storefrontDomainConfigured: Boolean(brand.domain),
+    supportContactConfigured: policies.supportContactConfigured,
+    launchPoliciesApproved: policies.approved,
     shopifyVerified: providers.shopifyVerified,
     whopVerified: providers.whopVerified,
     whopWebhookConfigured: providers.webhookConfigured,
     availableCatalog: brand.products.some(product => product.available && Boolean(product.variantId)),
     launchShippingPolicy: brand.shippingPrice === 0 && brand.freeShippingThreshold === 0 && Boolean(experience?.priorityEnabled) && experience?.priorityPrice === 4.99,
+    faceJamasPrivateMediaConfigured: faceJamasMediaConfigured(brand),
     controlledAcceptanceCompleted: acceptedAttemptCurrent,
   };
   return {
     ready: Object.values(checks).every(Boolean),
     checks,
+    policy: {
+      approved: policies.approved,
+      approvedAt: policies.approvedAt,
+      policyHash: policies.policyHash,
+    },
     acceptance: saved && acceptedAttemptCurrent ? { attemptId: saved.attemptId, orderId: saved.orderId, totalCents: saved.totalCents, acceptedAt: saved.acceptedAt } : null,
   };
 }
@@ -98,7 +128,10 @@ export async function recordLaunchAcceptance(db: Store, brandId: string, attempt
   return db.transaction(async () => {
     const brand = await db.brand(brandId);
     const providers = await providerChecks(db, brand);
+    const policies = await launchPolicyStatus(db, brandId);
+    if (!brand.supportEmail.trim() || !policies.approved) throw new HttpError(409, "Configure customer support and approve the current launch policies before recording launch acceptance.");
     if (!providers.shopifyVerified || !providers.whopVerified || !providers.webhookConfigured) throw new HttpError(409, "Verify the current Shopify, Whop and webhook connections before recording launch acceptance.");
+    if (!faceJamasMediaConfigured(brand)) throw new HttpError(409, "FaceJamas private fulfillment media access is not configured.");
     const attempt = await new PaymentAttempts(db.database).get(brandId, attemptId);
     if (attempt.state !== "completed" || !attempt.orderId) throw new HttpError(409, "Launch acceptance requires a completed verified payment and Shopify order.");
     if (attempt.shopifyDomain !== brand.shopify.account || attempt.whopCompanyId !== brand.whop.account) throw new HttpError(409, "The accepted payment used different provider accounts. Run a new controlled acceptance purchase.");

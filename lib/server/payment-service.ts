@@ -5,6 +5,7 @@ import { encrypt, decrypt, HttpError } from "./security";
 import { prepareLaunchQuote, launchQuoteInput } from "./launch-quote";
 import { PaymentAttempts, type PaymentAttempt } from "./payment-attempts";
 import { createShopifyDraft, recoverShopifyDraft, completeShopifyDraft, type DraftBinding } from "./shopify-drafts";
+import { claimFaceJamasPersonalizations, finalizeFaceJamasPersonalizations, personalizationRefsFromDraftInput } from "./personalization";
 import { createWhopCheckout, retrieveVerifiedWhopPayment, sameShopifyCredentials, type ShopifyCredentials, type WhopCredentials } from "./providers";
 
 const inputSchema = launchQuoteInput.extend({ email: z.email().max(254) }).strict();
@@ -13,6 +14,9 @@ function context(attempt: PaymentAttempt): DraftBinding {
   if (!attempt.encryptedContext) throw new HttpError(409, "Payment attempt has no saved quote.");
   const value: Context = JSON.parse(decrypt(attempt.encryptedContext, `payment:${attempt.brandId}`));
   return { ...value, attemptId: attempt.id, expiresAt: attempt.expiresAt };
+}
+function quotePersonalizations(quote: Awaited<ReturnType<typeof prepareLaunchQuote>>) {
+  return personalizationRefsFromDraftInput(quote.draftInput.lineItems as Array<Record<string, unknown>>);
 }
 async function connections(db: Store, brandId: string, attempt?: PaymentAttempt) {
   const brand = await db.brand(brandId);
@@ -38,6 +42,11 @@ export async function startPayment(db: Store, brandId: string, raw: unknown, key
   const ledger = new PaymentAttempts(db.database);
   let attempt = await ledger.prepare({ brandId, key, shopifyDomain: shopify.domain, whopCompanyId: whop.companyId, totalCents: quote.totals.totalCents,
     cartFingerprint: createHash("sha256").update(JSON.stringify(input)).digest("hex"), encryptedContext: encrypt(JSON.stringify({ email, quote }), `payment:${brandId}`) });
+
+  // Reserve every opaque artwork reference to this immutable attempt before any
+  // Shopify/Whop side effect. A different attempt cannot silently reuse it.
+  await claimFaceJamasPersonalizations(db, brandId, quotePersonalizations(quote), attempt.id);
+
   const binding = context(attempt);
   if (attempt.state === "prepared") {
     attempt = await ledger.beginDraft(brandId, attempt.id);
@@ -65,7 +74,12 @@ export async function reconcilePayment(db: Store, brandId: string, attemptId: st
   attempt = await ledger.acceptVerifiedPayment(brandId, attemptId, paymentId);
   if (attempt.state === "completed" || attempt.state === "review") return { state: attempt.state, orderId: attempt.orderId };
   attempt = await ledger.claimCompletion(brandId, attemptId);
-  const order = await completeShopifyDraft(shopify, context(attempt), attempt.draftId!);
+  const binding = context(attempt);
+  const order = await completeShopifyDraft(shopify, binding, attempt.draftId!);
+
+  // The Shopify order is not considered fully synchronized until each artwork
+  // receipt is bound to the same final order ID. Worker retries remain safe.
+  await finalizeFaceJamasPersonalizations(db, quotePersonalizations(binding.quote), attempt.id, order.id);
   attempt = await ledger.complete(brandId, attemptId, order.id, attempt.completionLease!.token);
   return { state: attempt.state, orderId: attempt.orderId };
 }

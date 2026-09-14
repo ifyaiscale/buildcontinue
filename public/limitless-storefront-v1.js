@@ -5,6 +5,8 @@
   var BRAND_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   var NUMERIC_VARIANT = /^\d+$/;
   var GID_VARIANT = /^gid:\/\/shopify\/ProductVariant\/(\d+)$/;
+  var PERSONALIZATION_REF = /^pers_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  var PERSONALIZATION_PROOF = /^[A-Za-z0-9_-]{40,100}$/;
 
   function error(message) {
     throw new Error("Limitless Checkout: " + message);
@@ -30,7 +32,18 @@
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) error("quantity must be a whole number from 1 to 20");
       if (seen[variant.key]) error("the same Shopify variant cannot appear twice");
       seen[variant.key] = true;
-      return { variantId: variant.value, quantity: quantity };
+
+      var ref = item.personalizationRef == null ? "" : String(item.personalizationRef).trim();
+      var proof = item.personalizationProof == null ? "" : String(item.personalizationProof).trim();
+      if ((ref && !proof) || (!ref && proof)) error("personalization reference and proof must be provided together");
+      if (ref && !PERSONALIZATION_REF.test(ref)) error("personalization reference is invalid");
+      if (proof && !PERSONALIZATION_PROOF.test(proof)) error("personalization proof is invalid");
+
+      return {
+        variantId: variant.value,
+        quantity: quantity,
+        ...(ref ? { personalizationRef: ref, personalizationProof: proof } : {})
+      };
     });
   }
 
@@ -69,7 +82,7 @@
   }
 
   global.LimitlessCheckout = Object.freeze({
-    version: "1.0.0",
+    version: "1.1.0",
     normalizeItems: normalizeItems,
     payload: payload,
     start: start

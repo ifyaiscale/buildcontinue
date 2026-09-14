@@ -1,6 +1,7 @@
 import { z, ZodError } from "zod";
-import { createCartSession } from "@/lib/server/cart-session";
+import { createCartSession, storefrontCartInput } from "@/lib/server/cart-session";
 import { requestSite } from "@/lib/server/hosts";
+import { verifyFaceJamasCartPersonalizations } from "@/lib/server/personalization";
 import { HttpError, rateLimit } from "@/lib/server/security";
 import { store } from "@/lib/server/store";
 
@@ -58,10 +59,14 @@ export async function POST(request: Request) {
     const form = new URLSearchParams(encoded);
     if (form.getAll("cart").length !== 1) throw new HttpError(422, "Cart data is invalid.");
     const raw = z.string().min(2).max(8192).parse(form.get("cart"));
-    let cart: unknown;
-    try { cart = JSON.parse(raw); }
+    let parsedJson: unknown;
+    try { parsedJson = JSON.parse(raw); }
     catch { throw new HttpError(422, "Cart data is invalid."); }
+    const cart = storefrontCartInput.parse(parsedJson);
 
+    // The public proof is verified against its private SHA-256 receipt before the
+    // cart is encrypted. Only the opaque pers_ reference survives in the token.
+    await verifyFaceJamasCartPersonalizations(db, brand, cart.items);
     const session = createCartSession(brand, cart);
     const target = new URL(`/checkout/${encodeURIComponent(slug)}`, site.origin);
     target.searchParams.set("cart", session.token);
