@@ -1,30 +1,50 @@
 # FaceJamas personalization architecture
 
-Customer artwork must survive storefront → checkout → payment → Shopify fulfillment without exposing raw customer images in public URLs, cart tokens, Whop metadata, or client-trusted pricing.
+FaceJamas customer artwork must survive storefront → checkout → payment → Shopify fulfillment without exposing raw customer images in public URLs, cart tokens, Whop metadata, or client-trusted pricing.
 
-## Flow
+## Active flow
 
-1. FaceJamas storefront requests a short-lived one-time upload session from Limitless.
-2. Limitless verifies the storefront Origin against the brand domain/aliases and stores only a SHA-256 hash of the random upload token.
-3. Browser uploads one JPEG/PNG/WebP (max 10 MB) to the `facejamas-upload` Supabase Edge Function using that capability token.
-4. The function atomically consumes the session, validates the file, stores the source in a private `personalization-assets` bucket, and records an opaque `pers_<uuid>` reference in `limitless.personalizations`.
-5. Storefront keeps a local object URL only for preview. Cart handoff contains only the opaque personalization reference.
-6. Limitless requires a current FaceJamas personalization reference for every FaceJamas merchandise line. Other brands cannot attach personalization references.
-7. Shopify draft line items carry `Personalization ID = pers_<uuid>` as a custom attribute. Draft validation requires Shopify to preserve that exact attribute before payment can be fulfilled.
-8. Payment attempts claim the personalization references. A reference claimed by a different attempt cannot be reused accidentally.
-9. On Shopify order creation, Limitless binds each personalization to the final order before the payment attempt is marked completed.
-10. Admin/fulfillment retrieval uses a separate short-lived one-time access token. `facejamas-asset` consumes it and redirects to a short-lived signed Storage URL.
+1. The FaceJamas storefront lets the customer select JPEG/PNG/WebP up to 10 MB and previews it with a local browser object URL.
+2. After the customer confirms they have permission to use the image, the browser uploads directly to the JWT-protected `facejamas-upload` Supabase Edge Function using the project's public anon credential. The function independently enforces the allowed storefront origins.
+3. `facejamas-upload` verifies the actual file signature, size and content type, applies a per-IP success rate limit, stores the source in the private `personalization-assets` bucket, and creates an opaque `pers_<uuid>` reference.
+4. The upload function returns the opaque reference plus a random proof. Only SHA-256 of that proof is stored in the RLS-protected `public.facejamas_upload_receipts` table.
+5. The storefront cart carries `{ personalizationRef, personalizationProof }` only long enough to enter Limitless. Raw image bytes and the private object path never enter the cart.
+6. At `/cart/start/facejamas`, Limitless verifies SHA-256 of the proof against the private receipt over its server database connection. The proof is then discarded. The encrypted 30-minute cart token carries only `personalizationRef`.
+7. Every FaceJamas merchandise line must have a verified personalization ID. Non-FaceJamas brands reject personalization data.
+8. The authoritative Shopify quote sends `Personalization ID = pers_<uuid>` as a line custom attribute. Shopify's calculated draft must echo the exact variant, quantity and personalization attribute or payment is blocked.
+9. Before Shopify draft or Whop side effects, the personalization receipt is claimed by the immutable Limitless payment attempt. A different attempt cannot reuse it.
+10. On successful paid Shopify draft completion, Limitless binds the same personalization to the final Shopify order ID before the payment attempt can be marked completed.
+11. Private fulfillment is available at `/facejamas-fulfillment` in the authenticated Limitless admin. Only order-bound personalization IDs are listed.
+12. Clicking **Open artwork** creates a one-time access capability in `public.facejamas_asset_access`. The JWT-protected `facejamas-asset` Edge Function consumes it and returns a five-minute signed private Storage URL. There is no permanent public source-image link.
 
 ## Privacy and abuse controls
 
-- Private bucket; no public object URLs.
-- Upload and fulfillment-access tokens are random, one-time, short-lived, and stored hashed at rest.
-- Upload session TTL: 10 minutes.
-- JPEG/PNG/WebP only; MIME + file-signature validation; max 10 MB.
-- Storefront Origin allowlist on upload-session issuance.
-- Customer rights/consent confirmation in the upload UI.
-- Cart/Whop metadata contains only opaque references, never image bytes or object paths.
-- Ordered artwork is bound to the Shopify order; orphaned uploads are cleanup-eligible.
-- This feature does not enable customer payments by itself.
+- Private Supabase Storage bucket; no public customer-photo URLs.
+- Public browser credential is the Supabase anon/publishable credential only. Service-role credentials never enter Netlify storefront JavaScript.
+- `facejamas-upload` is JWT-protected and separately checks the storefront Origin.
+- JPEG/PNG/WebP only, max 10 MB, with file-signature validation in addition to MIME validation.
+- Customer permission/rights confirmation is required before upload.
+- Maximum 20 successful uploads per hashed client IP per hour; old rate events are cleaned up.
+- Upload receipt proof is random and stored only as SHA-256 server-side.
+- Raw proof is discarded after cart-start verification; encrypted checkout token contains only the opaque `pers_…` ID.
+- Whop metadata never contains the image, object path or proof.
+- Shopify receives only the fulfillment-safe `Personalization ID` line attribute.
+- An artwork ID is reserved to one immutable payment attempt and one final Shopify order.
+- Fulfillment source-image links are generated only for authenticated admin users, are one-time capability based, and expire after five minutes.
+- Expired **unclaimed** uploads are deleted opportunistically from private Storage by the upload service. Attempt-bound or order-bound artwork is never removed by this orphan cleanup.
+- This feature does not enable customer payments by itself. `PAYMENT_ACCEPTANCE_ENABLED` and `PUBLIC_PAYMENT_ENABLED` remain separate launch gates.
 
-The browser preview is illustrative. It must not claim to be an exact manufactured garment rendering unless a verified production mockup renderer is later added.
+## Customer-facing representation
+
+The browser preview confirms which source photo was selected. It is intentionally labeled illustrative and must not be represented as an exact manufactured garment render unless a verified production mockup renderer is later introduced.
+
+## Operations
+
+- Fulfillment page: `/facejamas-fulfillment`
+- Upload function: `facejamas-upload`
+- Fulfillment source function: `facejamas-asset`
+- Private bucket: `personalization-assets`
+- Authoritative receipt/order binding: `public.facejamas_upload_receipts`
+- One-time fulfillment access: `public.facejamas_asset_access`
+
+Ordered artwork retention after fulfillment should be set as an explicit business/privacy policy before broad public launch. The current automatic cleanup intentionally removes only abandoned, expired, unclaimed uploads because it does not yet know when a fulfilled personalized order is safe to purge.
