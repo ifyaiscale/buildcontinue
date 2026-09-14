@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { Store } from "../lib/server/store";
 import { PaymentAttempts } from "../lib/server/payment-attempts";
 import { createCustomerReceipt, customerCheckoutInput, customerPaymentStatus, publicPaymentEnabled } from "../lib/server/customer-checkout";
+import { handleApi } from "../lib/server/api";
+import { route } from "../lib/server/http";
 
 async function withEnvironment(values: Record<string, string | undefined>, fn: () => void | Promise<void>) {
   const prior = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
@@ -15,6 +17,43 @@ test("customer payment has an independent fail-closed public gate", async () => 
   await withEnvironment({ PAYMENT_ACCEPTANCE_ENABLED: "true", PUBLIC_PAYMENT_ENABLED: undefined }, () => assert.equal(publicPaymentEnabled(), false));
   await withEnvironment({ PAYMENT_ACCEPTANCE_ENABLED: undefined, PUBLIC_PAYMENT_ENABLED: "true" }, () => assert.equal(publicPaymentEnabled(), false));
   await withEnvironment({ PAYMENT_ACCEPTANCE_ENABLED: "true", PUBLIC_PAYMENT_ENABLED: "true" }, () => assert.equal(publicPaymentEnabled(), true));
+});
+
+test("shopper payment API remains locked before any provider work when public activation is off", async () => {
+  const checkoutOrigin = "https://checkout.example";
+  const globals = globalThis as typeof globalThis & { limitlessStore?: Store };
+  const previousStore = globals.limitlessStore;
+  const db = new Store(":memory:");
+  await db.ready;
+  globals.limitlessStore = db;
+  try {
+    await withEnvironment({
+      NODE_ENV: "production",
+      APP_URL: "https://admin.example",
+      CHECKOUT_ORIGINS: JSON.stringify({ [checkoutOrigin]: "aure-studio" }),
+      ADMIN_PASSWORD: "synthetic-test-password",
+      ADMIN_PASSWORD_HASH: undefined,
+      SESSION_SECRET: "s".repeat(48),
+      PAYMENT_ACCEPTANCE_ENABLED: "true",
+      PUBLIC_PAYMENT_ENABLED: undefined,
+    }, async () => {
+      const response = await route(handleApi)(new Request(`${checkoutOrigin}/api/checkout/aure-studio/payment-start`, {
+        method: "POST",
+        headers: {
+          origin: checkoutOrigin,
+          "content-type": "application/json",
+          "idempotency-key": "customer_gate_test",
+        },
+        body: "{}",
+      }));
+      assert.equal(response.status, 409);
+      assert.match((await response.json()).error, /not enabled yet/i);
+      assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM payment_attempts").get()?.n, 0);
+    });
+  } finally {
+    globals.limitlessStore = previousStore;
+    await db.close();
+  }
 });
 
 test("customer checkout input cannot inject products, prices, totals or payment identifiers", () => {
