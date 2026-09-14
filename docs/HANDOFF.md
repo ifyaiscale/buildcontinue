@@ -1,211 +1,103 @@
 # Limitless Checkout — current handoff
 
-Last updated: 2026-09-13. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
+Last updated: 2026-09-13. This file is the current operational checkpoint. Use Git history and the linked architecture documents for older implementation history; do not treat superseded notes or screenshots as current evidence.
 
-## Durable payment retry worker
+## Current shipment — storefront cart → exact quote → gated payment → confirmation
 
-Successful signed Whop notifications now enqueue a deduplicated payment job before acknowledgment. A Netlify schedule dispatches an authenticated background worker once per minute. Jobs retain an expiring lease, bounded exponential retry delays, and a review state after repeated failures; review adds an administrator activity entry without provider error details or customer data. A crashed worker can be reclaimed, and each retry still independently verifies the payment and completes only its original Shopify draft. The existing private inbox table holds jobs, so no migration is required. Tests cover concurrent claims, duplicate notification conflicts, delayed retry, completion deduplication and trigger authentication.
+Active PR: **#2 — Connect customer checkout to payment lifecycle** on branch `chatgpt/customer-payment-flow`.
 
-The production administrator acceptance flag was set true in the preceding session (superseding the stale unset statement below). Public checkout remains hard-disabled. Product sync now shows all three FACEJAMAS products and CHEFINGS Green/White variants. No live payment has been performed. Remaining: provider contract/delivery acceptance, actual Shopify cart and personalization handoff, Shopify confirmation return, and customer launch checks. Do not imply the remaining work is only a test payment.
+The shopper-facing bridge now connects the encrypted storefront cart handoff to the payment architecture that was already implemented. The cart-aware checkout no longer creates a synthetic demo order. It now collects delivery details, requests an authoritative Shopify launch quote, shows the exact Shopify-calculated USD merchandise/tax/priority total, and invalidates that quote whenever delivery or priority changes.
 
-## Administrator payment acceptance shipment — 2026-09-13
+Three shopper API routes were added under the brand checkout boundary:
 
-**Automatic Whop success processing added:** signed `payment.succeeded` deliveries now route only payments carrying a valid `limitless_attempt_id` through the same independent Whop lookup and exactly-once Shopify draft completion path. Other company payments and non-success events are acknowledged without fulfillment. Duplicate delivery remains safe because event recording, payment claiming, completion leasing, and immutable order binding are all idempotent. Whop's current documentation confirms at-least-once, unordered delivery and recommends prompt acknowledgement; the current synchronous provider reconciliation must still be moved to a durable background worker before public traffic.
+- `POST /api/checkout/:slug/quote` — decrypts and revalidates the brand-bound cart token, rechecks current Shopify inventory/catalog state, and calculates the free-standard-shipping / optional $4.99 priority / tax total through Shopify.
+- `POST /api/checkout/:slug/payment-start` — remains fail-closed. It can call the existing durable payment engine only when **both** `PAYMENT_ACCEPTANCE_ENABLED=true` and `PUBLIC_PAYMENT_ENABLED=true`, and only for a brand already published in live mode with verified Whop. It creates no browser-trusted prices or product lines.
+- `GET /api/checkout/:slug/status?receipt=...` — resolves an encrypted brand-bound customer receipt to the original idempotent payment attempt and reports only safe states: awaiting payment, processing, confirmed, review, or expired.
 
-Added an admin-only, default-disabled payment path that turns a fresh Shopify quote into an inventory-reserved draft order, creates one exact-value Whop checkout, independently verifies the returned Whop payment, and completes the original Shopify draft once. Customer email, delivery address and quote context are encrypted in the existing private payment-attempt record. Attempts retain immutable Shopify/Whop account bindings, cart totals, checkout IDs and order IDs. Retries recover the uniquely tagged original draft and reuse the original checkout; uncertain outcomes fail closed rather than creating replacement drafts or orders. A short completion lease coordinates concurrent reconciliation, and a second successful payment enters review.
+The Whop return page polls the durable ledger. It says **Payment confirmed** only after the attempt is in the completed state, meaning the verified payment has produced the bound Shopify order. A paid-but-not-yet-completed attempt says processing and explicitly tells the buyer not to pay again. Review/error states also fail safely instead of inviting another payment.
 
-The protected Connections diagnostic now accepts an administrator email after a valid quote, prepares the Whop payment link, and reconciles a supplied Whop payment ID. The server still requires `PAYMENT_ACCEPTANCE_ENABLED=true`; it is deliberately unset in production until a controlled live acceptance purchase. The public checkout remains disabled. Webhook receipt is durable and signature verified, but automatic webhook-to-order processing, shopper cart handoff, customer confirmation, and FACEJAMAS line-item personalization remain launch work.
+Customer payment activation is deliberately separate from the existing administrator acceptance gate. `PUBLIC_PAYMENT_ENABLED` is currently unset/off; this shipment does **not** enable a real customer charge. No real Whop payment has been performed.
 
-Verification: 90 tests passed, one optional isolated PostgreSQL integration test skipped; TypeScript, diff validation and the production Next.js build passed. Tests cover encrypted context, idempotent draft/checkout creation, exact account/amount matching, changed-draft rejection, recovery ambiguity, concurrent completion, and completed-order retry. These are synthetic provider tests; no real Whop charge or Shopify order was created.
+### Verification for this shipment
 
-## Verification recovery — 2026-09-13
+- Netlify deploy preview #2 successfully built commit `4255898095c9b029cda9a1ba58d03ec112e189a7` with the new Next.js customer quote/payment/confirmation routes and the existing scheduled payment worker.
+- A follow-up regression commit adds checkout-host isolation coverage for the new quote/payment/status endpoints and keeps admin and cross-brand paths blocked. Its exact final preview status must be checked before merging PR #2.
+- New tests cover the independent public-payment gate, strict rejection of browser-injected products/prices/totals/payment IDs, encrypted receipt tamper/cross-brand rejection, idempotent attempt lookup, and expiry mapping.
+- No production deploy is currently possible because the Netlify team exhausted its production-deploy credit allowance. Published production remains online on its previous deploy; branch/deploy previews remain available. The owner plans to upgrade after building.
 
-Added `PaymentAttempts` operations on the existing private table: immutable account/total/cart fingerprint, brand-scoped idempotent preparation, expiring quotes, one-way draft creation claim, immutable draft/checkout bindings, account-scoped payment claims, duplicate-payment review, and immutable completed order binding. Provider calls are intentionally outside database transactions. An uncertain draft creation stays pending and must be reconciled rather than blindly recreated. Concurrency test verifies eight retries share one attempt and prohibits cross-brand reads, replacement drafts/orders and duplicate fulfillment. Full suite: 87 passed, one optional database test skipped. This module is not yet wired to customer APIs or provider mutations; completion leases and provider reconciliation still need implementation.
+## Current production account/catalog state — supersedes older connection notes
 
-Running the existing Node test runner outside the Windows sandbox resolves the previously reported ENOMEM problem. Full suite now passes 86 tests, with one optional PostgreSQL integration test skipped; TypeScript passes. Fixed the discovered regression by explicitly requiring USD in both Shopify pricing operations while retaining currency-independent account connection. Updated an obsolete authorization-error assertion. Payment verification now rejects sub-cent amounts rather than rounding them into a match; webhook verification rejects absent or unknown signature versions and requires seconds timestamps. Added regression assertions.
+A fresh read-only Supabase check on 2026-09-13 confirmed all three real brands exist once, remain `draft` + `demo`, and now have **verified Shopify + verified Whop connections with synced product catalogs**:
 
-These are tested foundation fixes, not a completed checkout. Payment attempts still lack lifecycle operations; Shopify draft creation/completion, provider recovery, customer cart handoff, real signed deliveries, and provider sandbox acceptance remain unimplemented/unverified. Do not say the system is ready for a live charge or imply background work after ending a turn.
+| Brand | Shopify | Whop | Synced variants |
+| --- | --- | --- | ---: |
+| CHEFINGS | verified | verified | 2 |
+| COZYINFANTS | verified | verified | 5 |
+| FACEJAMAS | verified | verified | 3 |
 
-## Current shipment — durable payment and Whop webhook foundation (2026-09-12)
+Do not repeat older handoff instructions saying COZYINFANTS still needs Whop connection or that CHEFINGS/FACEJAMAS have zero products. Provider verification is not the same as completed payment acceptance; webhook-secret/payment-specific behavior still needs acceptance verification before customer activation.
 
-**Whop checkout and verification client added 2026-09-13:** server code now creates idempotent one-time USD checkout configurations with the exact cent total and immutable Limitless attempt metadata. The authoritative payment read requires `paid` + `succeeded` and independently matches payment ID, connected Whop company, USD currency, exact total, checkout-configuration ID, and attempt ID before returning a verified result. Provider responses and checkout URLs are schema/host validated. Focused synthetic tests cover request shape and rejection of amount, currency, company, metadata, checkout, and status mismatches. TypeScript passes. This client is not yet connected to the public checkout route, and live remains disabled.
+## Storefront cart handoff — merged foundation
 
-Added private `payment_attempts` and `webhook_events` tables as schema version 2. The production Supabase migration was applied and read back successfully; both tables have RLS enabled and `anon`/`authenticated` have no table access. Supabase's security advisor reports the expected informational no-policy notices for these intentionally server-only tables. Its performance advisor also reports the new indexes as unused because no payments have been accepted yet, plus the pre-existing missing `orders.brand_id` index.
+PR #1 was merged to production branch `hoplite/beroia-65b17429` at commit `e0be107d1bdc2e2e72d887221b295461f13f1306`.
 
-Added a public per-brand Whop webhook route that bypasses browser CSRF checks only at the route wrapper, then requires Standard Webhooks HMAC-SHA256 verification over the exact raw body. It enforces the frozen Whop signature headers, five-minute timestamp tolerance, matching header/body event IDs, v1 envelopes, a 64 KiB limit, matching connected Whop account, and transactional event-ID deduplication. Stored webhook records contain only routing/audit identifiers and never the full customer/payment payload. The route records events but does not fulfill orders yet.
+Implemented behavior:
 
-TypeScript and the production build pass, including the new dynamic webhook route. A focused runtime test was added, but the normal TS test loader remains blocked on this Windows host by `uv_os_get_passwd ENOMEM`; an attempted alternate esbuild runner was blocked by the filesystem sandbox. No assertion failure occurred. Live checkout remains disabled.
+- Static storefront sends only Shopify variant IDs + quantities.
+- Limitless accepts numeric Shopify variant IDs and canonical `gid://shopify/ProductVariant/...` IDs and normalizes them against the synced brand catalog.
+- Browser prices/subtotals are never authoritative.
+- Server produces a short-lived encrypted, tamper-resistant, brand-bound cart token.
+- Cart start is restricted to the configured storefront domain/aliases.
+- Checkout revalidates the token and current catalog before using it.
+- Storefront integration contract is in `docs/CART_STOREFRONT_HANDOFF.md`.
 
-Next: create immutable payment attempts and Shopify drafts, create per-attempt Whop checkout configurations with exact USD totals and metadata, independently retrieve successful payments, then add exactly-once draft completion and recovery. Configure each connected Whop business's webhook secret privately after the deployed endpoint exists; do not request secrets in chat. Run signed test deliveries before any real charge.
+The separate CHEFINGS / COZYINFANTS / FACEJAMAS storefront source still lives in Sites-managed projects that are not exposed through the current GitHub connector. Their existing Checkout buttons therefore still need to be wired to the documented form POST when that source becomes available. Do not invent a second cart contract.
 
-## Active launch plan — owner requests continuous progress
+## Payment engine already implemented
 
-Definition of done: a real customer can arrive from a brand storefront, choose products/options, pay the correct USD total through Whop, receive confirmation, and have exactly one paid Shopify order containing fulfillment details. A deployed dashboard or a successful connection alone is not completion. Every progress update should state completed work, the next action, and any concrete owner-only blocker; do not repeatedly hand back generic instructions or request already-authorized implementation/deployment approval.
+The customer bridge must continue to reuse, not replace, the existing payment engine:
 
-Read-only production check on 2026-09-11: COZYINFANTS Shopify verified, five imported products, Whop not connected. CHEFINGS and FACEJAMAS: Shopify and Whop not connected, zero imported products. All three remain demo drafts; free shipping and $4.99 optional priority processing are saved.
+1. Shopify launch pricing revalidates current variants, availability/inventory, destination, free standard shipping, optional unchecked $4.99 priority processing once per order, and exact USD taxes/total.
+2. `PaymentAttempts` persists an immutable attempt before provider side effects, with encrypted customer/quote context and account/cart/total bindings.
+3. Shopify creates/reserves one tagged draft for that exact attempt. Uncertain creation is recovered by its unique tag rather than creating a replacement.
+4. Whop creates one exact-value one-time USD checkout with immutable `limitless_attempt_id` metadata.
+5. Signed Whop `payment.succeeded` deliveries are recorded/deduplicated and enqueue durable payment jobs.
+6. The worker independently retrieves the payment and checks company, currency, exact cents, checkout ID and attempt metadata.
+7. A verified payment can complete only its original Shopify draft. Completion uses a lease and retry/recovery logic; duplicate successful payments enter review rather than fulfilling twice.
+8. Buyer-facing confirmation must remain derived from this durable state, never from Whop browser redirect parameters alone.
 
-Launch sequence:
-1. COZYINFANTS first because its catalog is connected; reuse the completed flow for CHEFINGS and FACEJAMAS.
-2. Implement server-owned final quotes with current Shopify variants/prices/availability, free standard shipping, optional unchecked $4.99 processing once per order, and applicable taxes. No manual shipping-rate task for owner.
-3. Implement Whop sessions, durable payment attempts, signature-verified webhook inbox, independent payment verification, and retry/reconciliation.
-4. Complete exactly one Shopify order for a verified payment; retain customer/variant/priority information, recover failed sync without asking the buyer to pay again.
-5. Connect actual storefront cart and confirmation flow; preserve FACEJAMAS artwork/variant personalization through fulfillment before that brand launches.
-6. Deploy backend and workers, configure callback secrets, verify provider test-mode success/failure/cancel/retry/duplicate cases and account isolation.
-7. Present a concrete live acceptance purchase for explicit authorization, verify payment and Shopify order, then enable the customer route. Repeat account and transaction acceptance for remaining brands.
+No card number is collected by Limitless; Whop hosts payment collection.
 
-Owner action now: in Limitless Connections with COZYINFANTS selected, use Connect Whop and enter the business API key only in the protected form; verify connection. This is company-read verification only, and payment-specific access must be checked during implementation. Do not request the key in chat. Code implementation can proceed while the connection is completed. Ask for further owner action only when credentials, provider approval screens, domain ownership, or a real charge require it.
+## Fixed launch policy
 
-## Current checkpoint — free shipping and optional priority processing
+- Launch destinations: US, Canada, UK (`GB`), New Zealand, Australia.
+- Currency: USD throughout storefront display, quote, Whop payment and recorded payment checks.
+- Standard shipping: **free**; product prices already include standard shipping economics.
+- Optional priority processing: **$4.99 USD**, unchecked by default, once per order.
+- No browser-provided shipping price, product price, tax or total is trusted.
+- COZYINFANTS remains the first end-to-end acceptance brand; reuse the accepted flow for CHEFINGS and FACEJAMAS.
 
-Owner clarified shipping is already included in product prices. Applied and read-back verified settings on the existing COZYINFANTS, CHEFINGS and FACEJAMAS records: shippingPrice = 0, freeShippingThreshold = 0, priorityEnabled = true, priorityPrice = 4.99 USD, priorityLabel = Priority processing. Delivery copy explains free standard shipping and the optional processing fee. Other brand data and credentials were preserved.
+## Deployment state
 
-Existing checkout starts priority unchecked, allows checking/unchecking, calculates the fee once per order on the server, and itemizes it separately. Executed the shared totals function: two $29.99 items total $59.98 without priority, $64.97 with priority, and $59.98 after deselection; shipping stays zero. No new application deployment is needed for saved settings. Production Netlify deployment of the scope-refresh fix was independently verified ready at commit fa0b1ecf2dc3fd2b2427c6e56cb4a02d3fbde1c1.
+- GitHub production branch: `hoplite/beroia-65b17429`.
+- Netlify project: existing `limitlesscheckout` project; do not create a replacement project.
+- Supabase: existing Limitless Checkout project; do not create a replacement database.
+- Netlify production deploys are currently paused by the team's credit allowance. Production site remains online on the older deploy. Deploy previews are the active build/verification path until the owner upgrades or the billing cycle resets.
+- Do not claim merged code is live until Netlify production reports the matching commit as ready.
 
-This decision supersedes earlier shipping-rate selection/acceptance requirements for checkout: do not send the owner through Get shipping rates as a launch prerequisite. The existing Shopify diagnostic still uses rate discovery and does not implement this live pricing policy. When implementing live quotes, use merchant-authorized free shipping and the optional processing line, calculate applicable taxes, and preserve the selection through Whop payment and Shopify fulfillment records. Live payment lifecycle remains unimplemented and disabled.
+## Remaining launch work — ordered
 
-## Current checkpoint — Shopify scope refresh
+1. **Finish PR #2 verification and merge.** Confirm the follow-up Netlify deploy preview is green after the route-isolation regression and this handoff update. Keep `PUBLIC_PAYMENT_ENABLED` off.
+2. **Wire the real storefront Checkout buttons** for CHEFINGS / COZYINFANTS / FACEJAMAS to the existing cart-start contract when their Sites-managed source is accessible. Start with COZYINFANTS.
+3. **Exercise COZYINFANTS quote flow against real Shopify** through an accessible checkout preview: cart → delivery details → exact Shopify total. Verify representative destination/tax behavior without starting payment.
+4. **Verify payment-specific Whop readiness** for COZYINFANTS, including saved webhook secret/callback delivery and exact one-time checkout creation requirements. Never request secrets in chat.
+5. **Controlled acceptance flow.** When the owner explicitly authorizes a real acceptance purchase, enable only the necessary acceptance/public gates, run one controlled COZYINFANTS purchase, verify signed callback + independent Whop lookup + exactly one paid Shopify order + buyer confirmation, then test failure/cancel/retry/duplicate behavior. Disable/fail closed if any binding differs.
+6. **Production publish after Netlify upgrade.** Deploy the verified production branch, confirm the exact commit and callbacks, then deliberately publish/activate shopper payment only after acceptance. Do not equate upgrading Netlify with enabling payments.
+7. **FACEJAMAS personalization before that brand launches.** Artwork/photo data needs durable private storage and a fulfillment-safe reference carried into the Shopify order. Do not place raw/base64 customer artwork in cart tokens or public URLs.
+8. Add/verify refund/dispute/reconciliation visibility, paid-but-unsynced operations, alerts and restore-tested backups before broad traffic.
 
-Owner reports COZYINFANTS verification succeeded and the app version was updated for write_draft_orders. Shipping diagnostic still reports that permission missing; the active version's required versus optional scopes have not been independently inspected. Found that permission verification reused the cached client-credentials token even after a scope release.
+## Definition of done
 
-Added one fresh-token retry when required catalog or operation scopes are missing. Rechecks store identity and permissions after refresh, retains strict rejection if still absent, and leaves legacy static tokens unchanged. Tests cover stale-token recovery, bounded retry, legacy behavior and identity mismatch after renewal. Full suite: 74 passed, one optional PostgreSQL test skipped; TypeScript passes. Real Shopify refresh remains owner acceptance pending.
+A real customer can start at a brand storefront, choose the correct products/options, pass a server-authenticated cart into Limitless, receive an authoritative Shopify-calculated USD total, pay exactly that amount through Whop, return to a status page that does not trust browser success, and receive confirmation only after **exactly one** corresponding paid Shopify order exists with the required fulfillment details. Provider duplicate/retry/failure paths must not create duplicate orders or tell a paid customer to pay again.
 
-Next: after deployment, retry Get shipping rates directly; no credential re-entry needed. If still missing, inspect the active Shopify version's required Scopes and installation grant. Live payment lifecycle remains unimplemented and disabled.
-
-## Current checkpoint — Shopify store identity error
-
-The user corrected Netlify’s linked repository from `realecomgirl/build` to `ifyaiscale/buildcontinue`, retaining production branch `hoplite/beroia-65b17429`. Their subsequent screenshot confirms the new Client ID/Client secret form is deployed. COZYINFANTS verification now returns “Shopify account did not match the requested store.” No provider response or canonical domain has been independently observed.
-
-This shipment separates malformed Shopify identity/permissions responses from a real domain mismatch. A mismatch now shows both the validated Shopify-returned domain and entered domain to the protected administrator, and asks them to confirm ownership in Shopify Settings → Domains before re-verifying. It does not automatically accept aliases, change account mapping, save failed credentials or weaken identity checks. Added diagnostic tests; full suite passes 73 tests with one optional PostgreSQL integration test skipped. TypeScript and production build pass.
-
-Next: once this update deploys, retry COZYINFANTS verification and inspect the specific returned error. If a different domain is shown, confirm it belongs to COZYINFANTS before using it. Never request credentials in chat. Provider connection, catalog import and live payment implementation remain incomplete.
-
-## Latest launch work — pricing diagnostic and account access (2026-09-11)
-
-The Shopify authorization shipment is published as `20542d68aeef3f375fea70e2978b76953163781a` on `hoplite/beroia-65b17429`. Its local tests and build passed. The GitHub combined status returned zero status contexts, so Netlify deployment is not yet independently confirmed.
-
-Connections now includes a protected **Check Shopify shipping and tax** form. After Shopify verification and product import, choose a product/quantity and a delivery address, request current shipping rates, then calculate the selected service. It uses the existing diagnostic endpoint, shows USD totals and Shopify warnings, discards stale results after edits, and creates no drafts, payments, or saved customer addresses. Requires `write_draft_orders` in addition to catalog permissions. Compare real results for the five launch countries before selecting the final payment flow. TypeScript and production build passed for the form.
-
-The user has successfully connected **both Netlify and Supabase in this conversation**. Do not ask them to connect again. At this checkpoint the running tool registry still contains neither provider's actions despite those confirmed connection messages. Rediscover available actions on the next resumed turn; inspect the existing Netlify project and Supabase project, not new projects. No production configuration, records, schema, or provider credentials have been modified in this workspace. Runtime secrets are absent here.
-
-The original goal remains going live as soon as possible. **Not yet complete:** durable payable quotes, reserved Shopify drafts, Whop checkout sessions, signed webhook processing, authoritative payment verification, Shopify order completion/recovery, personalization, live shopper cart handoff, and launch acceptance. Do not call this a live-payment shipment. Finish these in the existing architecture; keep real payment collection disabled until verification.
-
-## Current shipment — Shopify app authorization (2026-09-11)
-
-The owner authorized completing the work needed to go live as soon as possible. Shopify Connections now defaults to per-brand Dev Dashboard Client ID/Client secret authorization. The server exchanges credentials, validates store identity/scopes/USD, and saves only after verification; existing encrypted storage binds credentials to the brand/provider. Tokens are cached server-side, coalesced during concurrent requests and renewed before expiry. Restarted/serverless processes acquire a fresh token automatically. Existing access-token connections remain supported. No schema migration or new environment variables are needed for this shipment.
-
-Verification: 72 tests passed, one optional local PostgreSQL test skipped because its opt-in database was not configured; TypeScript and production build passed. Added real API-handler tests using synthetic providers for encrypted persistence and failed-replacement preservation, plus token expiry/concurrency/account-isolation tests. No real account connection or live charge was performed.
-
-Next: after deployment, install each brand’s app on its own eligible store, then enter its Client ID/Client secret only in the protected Connections form and import products. COZYINFANTS is first. All older statements below that token exchange/renewal is unimplemented are historical and superseded by this shipment. OAuth for stores outside the eligible owning organization is still unimplemented. Whop payments, webhook processing and Shopify paid-order completion remain pending; live checkout stays blocked until the lifecycle and account acceptance are complete.
-
-**Current Shopify setup checkpoint — owner reports Active, 2026-09-11 00:35 UTC:** after configuration/release guidance, the owner says the COZYINFANTS app version is active. This is owner-reported progress, not an independently inspected Shopify version; the attached image is the earlier Hoplite Environment screen. Their pasted configuration previously showed the malformed App URL `https://example.comhttps://shopify.dev/apps/default-app-home`. They were instructed to replace the entire field with `https://shopify.dev/apps/default-app-home`, uncheck embedding/legacy install flow, keep scopes `read_products,read_inventory` and Webhooks API version `2026-07`, leave optional scopes/preferences/redirect URLs blank, and release (suggested version name `catalog-read-access`). Exact released values are not independently verified.
-
-**Next:** in the COZYINFANTS app's Dev Dashboard **Home → Install app**, select only the real COZYINFANTS store, review the requested product/inventory read permissions, and install. Stop if the store is missing or unexpected permissions are requested; do not select/create a development store or install on another brand. Confirm installation before collecting credentials. Installation, organization eligibility and provider verification remain unconfirmed; Limitless token-flow support still needs implementation. Add `write_draft_orders` later when explicitly setting up the pricing diagnostic, with scope approval. Do not configure a webhook receiver or OAuth redirect that has not been implemented.
-
-**Owner decision — 2026-09-11 00:28 UTC:** use **individual Shopify apps**, one for each brand: **Limitless - COZYINFANTS**, **Limitless - CHEFINGS**, and **Limitless - FACEJAMAS**. Keep the single existing Limitless dashboard, Netlify project and Supabase database; do not create separate hosting/database projects. Start with COZYINFANTS; latest configuration progress is recorded above. This choice does not establish Shopify organization ownership or client-credentials-grant eligibility; those requirements still apply independently to each app/store. The attached historical Hoplite Environment image does not show the current Shopify screen.
-
-**Latest brand checkpoint — 2026-09-11 00:20 UTC:** the owner reports all three brands are added, including storefront domains, Shopify domains and Whop business IDs. A fresh read-only Supabase query confirmed **exactly one record each for COZYINFANTS, CHEFINGS and FACEJAMAS**, with all three identifier fields populated on each record. **All Shopify and Whop verification flags remain false.** This verifies saved identifiers, not their correctness, domain ownership, provider authorization or payment readiness. No actual domain/ID values, private brand fields or credentials were displayed; no records were changed by verification. COZYINFANTS had already passed the owner's save-and-refresh check. The attached historical Environment screenshot is not evidence of the current dashboard.
-
-**Earlier app-creation checkpoint — owner confirmation, 2026-09-11 00:23 UTC:** the owner initially had no Shopify app. They were guided through **Apps → Create app → Start from Dev Dashboard** in the organization that owns COZYINFANTS, using name **Limitless - COZYINFANTS**. They have since reported reaching configuration; do not repeat app creation or the question about an existing app. If the owning organization is unavailable, resolve eligibility rather than creating an unrelated organization. [Current creation instructions](https://shopify.dev/docs/apps/build/dev-dashboard/create-apps-using-dev-dashboard) describe this flow and 24-hour tokens obtained programmatically for own-store apps.
-
-The current Limitless connection form accepts an Admin API access token, not a Client secret; client-credentials token exchange/renewal and OAuth are **not implemented**. Current [Shopify guidance](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/client-credentials-grant) requires the app and stores to be in the eligible owning organization for the client-credentials flow. Before accepting new app credentials, implement and test secure per-brand credential storage and token acquisition/renewal, or the appropriate authorization alternative if that grant is ineligible. Do not guide new apps through obsolete token-reveal instructions, put a Client secret in the access-token field, or rely on manual daily token replacement. Keep credentials in protected forms/settings only. No code changes for this new authorization flow have been made yet.
-
-**Latest hosting checkpoint — owner-confirmed sign-in, 2026-09-11 00:05 UTC:** the owner reached the Limitless password form at **https://limitlesscheckout.netlify.app**, was guided to use the dashboard `ADMIN_PASSWORD`, and explicitly confirmed **“I'M SIGNED IN.”** Treat this as owner-reported successful application sign-in, not an agent-observed browser test. The project remains Private. The earlier build configuration showed branch `hoplite/beroia-65b17429`, Next.js detection, `npm run build` and publish directory `.next`; the owner was guided to copy the four private database/security settings, add `NODE_VERSION=24`, and set `APP_URL=https://limitlesscheckout.netlify.app`. Exact Netlify runtime values and the authenticated data response have not been independently inspected.
-
-- Fresh external check returned HTTP 401; the browser then reached Netlify's **Team protection / This site is private** page, which requires an invited Netlify account. This is the hosting access gate, not evidence of an application error or successful build. Do not disable privacy or bypass the gate to obtain agent access.
-- The earlier one-shot GitHub commit-status read for `b12388f` returned no status contexts. The owner has since confirmed application sign-in and COZYINFANTS persistence after refresh; the saved record was independently verified in Supabase as recorded above. This is not a new agent-browser login test or proof of provider/payment readiness.
-- **Next:** all three brand records and identifiers are saved; proceed to provider authorization as described above, without recreating brands. Do not repeat sign-in or credential-reset instructions without new evidence, change the project to public, or request secrets in chat. Documentation-only checkpoint commits should skip CI to avoid unnecessary builds.
-
-**Database checkpoint — Supabase connected and initialized, after the owner's 23:41 UTC update:** the owner reset the database password and updated `DATABASE_URL` privately. `npm run db:check` passes authentication and certificate/hostname verification. Applied `npm run db:migrate` successfully and verified the real cloud schema through the application Store. Six private tables exist with RLS enabled; both `anon` and `authenticated` roles are denied direct access. At initialization, brands, orders, activity, credentials and idempotency tables were empty. No existing records were imported or deleted. The subsequent Netlify deployment checkpoint is recorded above; a successful connection from this sandbox does not verify Netlify's private runtime settings.
-
-### Latest setup verification
-
-- The owner restored the original dashboard security settings. Current environment checks confirm valid administrator-authentication, session-secret and credential-encryption-key formats; no values were displayed or written to repository files.
-- Live `db:check` and `db:migrate` succeeded. A separate read-only verification checked schema version 1, all six tables, RLS, zero application records, and actual permission-denied responses for both browser database roles. The application's PostgreSQL Store read empty brands/orders/activity through the real Supabase transaction pooler.
-- No sample brands, test orders, provider credentials or other customer records were inserted. The database password rejection is resolved; the earlier Hoplite Preview login-cookie blocker is a separate unresolved issue.
-- No application code changed in this setup checkpoint. The previous code shipment passed 77 tests, TypeScript and the production build; those are historical code checks, not new owner-browser or deployment verification.
-
-**Earlier unresolved blocker — owner report, 21:16 UTC:** private Preview login still returned “The sign-in security cookie is missing or invalid” after the standalone-tab change. The owner explicitly raised repeated failures and wasted credits. The external cookie roundtrip remains unverified and was escalated to Hoplite's developers. The owner has since chosen a separate hosting/database path; do not send them through further speculative Preview login workarounds or weaken cookie protections.
-
-## Latest shipment: Supabase storage foundation
-
-- Added shared asynchronous SQLite/PostgreSQL storage, private schema migration, secret-safe connection/migration commands, and a small server-side connection pool compatible with Supabase's transaction pooler. `DATABASE_URL` takes precedence; invalid/missing cloud setup never silently falls back to SQLite. Cached database configuration changes require a restart.
-- Preserved credential encryption, host/CSRF boundaries, exact demo totals, and atomic idempotency. Cross-instance advisory locking protects JSON updates, slug allocation, and concurrent checkout retries. Live payments remain disabled.
-- PostgreSQL starts empty, unlike local seeded SQLite. No database migration/import runs during ordinary app requests. RLS is enabled and browser roles have no schema/table/sequence access.
-- Supabase initially failed TLS verification (`SELF_SIGNED_CERT_IN_CHAIN`). Retrieved the **public** root certificate from the URL in Supabase Studio's official source, bundled it for Supabase hosts only, and verified its fingerprint. Certificate and hostname verification remain enabled. The subsequent authentication failure was resolved by the owner's database-password reset and private connection-string update. No additional certificate work is needed from the owner.
-- `DATABASE_URL` is available through this run's environment; its protocol/pooler port/password-presence checks passed without exposing values. No `.env.local` exists in this current sandbox and no runtime secret file was created for this shipment. The earlier runtime-file notes below describe a previous environment.
-- Code-shipment verification: **77 tests passed**, including a real **isolated local PostgreSQL 16** instance with concurrency, rollback, encrypted persistence, migration replay, guest-role denial and authenticated API checks; TypeScript and the production build passed. Tests strip real database/security variables. The initial actual Supabase check failed with sanitized `28P01`; the latest successful cloud checks are recorded above. No new owner-browser login or deployed UI verification is claimed.
-- Guide: [SUPABASE_SETUP.md](SUPABASE_SETUP.md). Existing `.hoplite/settings.json` changes are unrelated and remain unstaged.
-- Hosting recommendation: Netlify Free plus Supabase Free, with paid upgrades as needed. Supabase is connected and initialized; the initial Netlify deploy is awaiting confirmation as described above. Check current quotas and production availability/backup needs before real payments. The existing SQLite database is not migrated by publishing this code.
-
-## Outcome and fixed decisions
-
-- A **private, single-owner** dashboard for COZYINFANTS, CHEFINGS and FACEJAMAS, not a merchant subscription SaaS.
-- Selected architecture: Shopify storefront/cart → brand-specific Limitless checkout → Whop payment → verified server notification → reliable Shopify order/fulfillment synchronization.
-- Owner confirmed provider approval for the arrangement and physical-product businesses on 2026-09-10. This is owner confirmation, not independently performed account/payment verification.
-- Launch destinations: US, Canada, UK (`GB`), New Zealand and Australia. **USD for display, quotes and payments in every country**. No automatic local-currency switching.
-- Payment infrastructure comes before Shopify store design. Preserve FACEJAMAS personalization through eventual payment and fulfillment. COZYINFANTS redesign should retain its demonstrations/GIFs, box contents section and starry-galaxy concept; that redesign has not been recovered or implemented here.
-- Guide the owner one step at a time. The owner uses Windows. Never ask for passwords/API keys in chat or screenshots; use protected connection forms or the platform's private Environment settings.
-- Every completed shipment must be committed and pushed to GitHub, with this handoff updated. Never commit secrets, databases, customer data or private attachments.
-
-## Implemented and published before this checkpoint
-
-| Area | Current implementation |
-| --- | --- |
-| Dashboard | Brand management, account identifiers, settings, checkout editor, demo orders/activity, private sign-in |
-| Checkout | Branded responsive no-charge demo with optional offers; exact server-side demo totals and idempotency |
-| Connections | Encrypted per-brand credentials; Shopify identity/scopes/USD checks and catalog import; Whop company read verification |
-| Host isolation | Registered checkout domains cannot access management APIs or other brands; exact-origin checks remain enforced |
-| Pricing diagnostic | Admin-only `POST /api/brands/:id/payment-quote`; Shopify draft calculation without creating a draft/order or payment |
-| Five-country scope | Shared UI/server country allowlist; country-specific diagnostic address validation; rejects non-USD rates/totals |
-| Heading | Overview says “Your brands are growing.” |
-
-Relevant earlier commits: `19fd46f` (host isolation), `3c88e80` (pricing diagnostic/plan), `40414ea` (five countries/USD), `8badb6e` (heading). Use Git history for the exact latest checkpoint rather than copying a potentially stale head SHA from a document.
-
-## Earlier setup checkpoint: signing in, not account connection yet
-
-1. The owner saved `ADMIN_PASSWORD`, `SESSION_SECRET` and `CREDENTIAL_ENCRYPTION_KEY` through Hoplite's private Environment settings. Presence/format checks passed without displaying values.
-2. The already-running Next.js process retained its old demo environment. The saved values were applied to an owner-readable, **Git-ignored `.env.local`** file in this thread. Next.js reloaded it and showed the login form; unauthenticated `/api/state` returned 401.
-3. The owner's first sign-in attempt failed with `Request origin must match the application origin`. Initially `APP_URL` was missing; setting it made a direct-listener check pass but **did not fix the owner's proxied request**. The owner reported the same failure afterward.
-4. Routing-only diagnostics identified the Preview proxy rewriting `Origin`, `Host` and forwarded host/protocol to localhost/HTTP, without preserving the original origin. Diagnostics were removed; no password, cookie value or request body was logged. The proxy behavior was reported to Hoplite's developers.
-5. A **development-only signed-CSRF adapter** now covers dashboard authentication/brand mutations. It requires exact `DEV_PROXY_ORIGIN=http://localhost:3000`, exact external HTTPS `APP_URL`, private authentication, an exact canonical client-origin header, and a valid cookie-matched proof bound to the public origin and current session. Anonymous proofs only permit login; production and checkout-host checks are unchanged. Both origin settings are applied in the Git-ignored runtime file. No wildcard/plain localhost allowlist was introduced.
-6. The owner still reported failure after the adapter shipped. A temporary **password-free roundtrip from the owner's actual open page**, at 21:02 UTC on 2026-09-10, confirmed: embedded frame = yes; public origin and proxy host matched; signed proof valid; security cookie absent. This is evidence from the real browser, not an inference from historical screenshots. The earlier local top-level browser test missed blocked cookies in the embedded Preview.
-7. Embedded private login now displays **Open secure sign-in**, opening `/` in a separate tab with `noopener noreferrer`, instead of an unusable password form. The client also refuses embedded login submissions before any password request. Standalone login and embedded demo-brand actions remain available. A valid signed proof without an unambiguous cookie still fails with 403, but now explains the missing/invalid security cookie instead of the generic origin error. Temporary roundtrip requests/logging were removed; no password, token value or cookie value was recorded.
-8. Owner sign-in and the three real provider connections still need confirmation. The last inspected dashboard contained only the synthetic sample brands (Auré Studio, Form & Field, Everyday Supply) and eight sample orders. Do not claim the real brands or account records were migrated by pushing Git.
-
-The **Open secure sign-in** button exists, but is **not a confirmed resolution**. Sessions use `HttpOnly; Secure; SameSite=Strict` when the configured application origin is HTTPS. The earlier observed embedded Preview did not return the security cookie; this does not establish that iframe restrictions are the sole cause. The latest failure could involve response-cookie rewriting/rejection or inbound-cookie handling, and remains unlocalized. Do not weaken cookie protections or send the owner through more password/settings changes.
-
-### Resuming or moving the environment
-
-- `.env.local` is private runtime configuration, not a committed setup artifact. A fresh sandbox or deployment needs the private settings again. Store the current `APP_URL` and development-only `DEV_PROXY_ORIGIN` in the platform's Environment settings too if they should survive rebuilding this workspace. Production must instead use a correctly configured proxy; the adapter is always disabled there.
-- A new Preview origin requires an updated `APP_URL`. Use the actual browser origin, not `localhost`, the Hoplite chat origin or a URL containing an authentication query string. Production proxies must preserve `Host`; the development proxy fallback is not permission to relax production isolation.
-- If changing secrets in platform settings, reconcile the running process and private runtime file; a browser refresh alone does not reload stale server environment values. Never print the file contents or secret values while diagnosing.
-- Back up the credential-encryption key separately using the owner's password manager. Replacing it without migrating credentials makes stored provider credentials unreadable.
-- Existing `.hoplite/settings.json` and generated `next-env.d.ts` changes predate this checkpoint. Do not automatically stage them or `.hoplite/attachments/` with the next feature commit.
-- The managed Preview tool previously required an optional `promote` object before any listener existed. The owner opened Preview from Hoplite successfully. Do not repeat failed promotion calls or invent a Stop/Restart button absent from the user's interface. Inspect live ports and the actual page.
-- For this runtime, the actual Next.js listener is port 3000; the browser-facing local proxy was port 23000. That proxy rewrites `Origin`/`Host` to `http://localhost:3000`. **Verify both the direct listener and the rewriting proxy**, including browser-managed cookies. A direct-listener success alone missed this incident. Never add localhost to the allowed external origins without the signed proof requirements.
-- The adapter deliberately excludes public checkout submissions. Five-country demo checkout browser acceptance is still pending; test checkout on an origin-preserving path rather than weakening its host isolation to make it run through the rewriting proxy.
-
-## Next actions, in order
-
-1. **Completed: Supabase database login corrected.** Authentication and verified TLS passed after the owner's password reset and private URI update. Do not ask the owner to reset it again without new evidence.
-2. **Completed: cloud schema initialized and verified.** Migration and real database privacy/empty-state checks passed without injecting samples or importing existing local records. A later data migration needs explicit confirmation and a private backup.
-3. **Prepare Netlify and verify standalone owner login.** Configure Node.js 24, server-only database/security settings and an exact HTTPS `APP_URL`; do not enable the development proxy adapter there. Verify real sign-in, empty-state behavior and durable storage before provider connections. Add trusted edge/distributed rate limiting before public production exposure. The earlier Hoplite Preview cookie failure remains unresolved and is not evidence about this new host.
-4. **Create/select each real brand.** Avoid duplicates. Keep account mapping separate for COZYINFANTS, CHEFINGS and FACEJAMAS. Do not delete sample records or overwrite an earlier private database without explicit confirmation.
-5. **Connect Shopify for each brand.** In Connections, use its permanent `.myshopify.com` domain and current supported app/token flow. Verify `read_products`/`read_inventory`, import products, and grant `write_draft_orders` for pricing diagnostics. Check current provider documentation before guiding app creation/token expiry; OAuth/refresh is not implemented.
-6. **Connect Whop for each brand.** Enter that brand's company ID and API key only in the protected form. Verification is company read access, not proof of payment creation or webhook delivery. Do not invent a webhook URL before implementing the receiver.
-7. **Pricing acceptance.** Compare representative carts, shipping, tax and applicable cross-border duties across all five countries in USD against the actual Shopify stores. Current automated provider tests are synthetic. No-rate, warning, unsupported currency, bundle and changed-cart responses remain blocked.
-8. **Implement live payment lifecycle.** Durable immutable quotes/attempts; Shopify draft inventory reservations; actual Whop sessions; raw-body signed webhook inbox; authoritative payment lookup; event/payment deduplication; one fulfillment result per quote; retry/reconciliation and paid-but-unsynced visibility. Never blindly create another order after a timeout or silently ignore a second successful payment.
-9. **Finish personalization and operations.** Private artwork storage and fulfillment references, refunds/disputes, monitoring, restore-tested backups and durable workers. Configure production DNS/HTTPS and validate callbacks. No finished theme is needed for local implementation.
-10. **Explicitly authorized acceptance transactions**, then store design. Owner provider approval is not authorization to make an unannounced real charge/refund.
-
-## Verification and unresolved boundaries
-
-- The five-country milestone passed 49 tests, TypeScript and the production build. The heading was verified in the running browser.
-- This checkpoint adds a regression for HTTPS development Preview login through an HTTP proxy: exact configured origin accepted, wrong/cross-site origins rejected, secure strict-session cookie issued, and production unknown-host rejection preserved.
-- Earlier login checkpoint verification: **61 tests passed**, TypeScript passed and production build passed. Tests ran with private security variables and `DEV_PROXY_ORIGIN` unset; synthetic fixtures cover successful login, session-bound proof refresh, logout, authenticated brand creation, live-publish refusal, malicious/expired proofs, cross-site/checkout isolation and production-disabled fallback. Client tests also prove embedded login sends no request, standalone login remains available, and embedded demo mutations are not blocked. Missing/duplicate-cookie guidance tests still require 403.
-- Fresh UI verification loaded the actual running app inside a local browser iframe: the standalone-link message was visible and there was no password input. Clicking **Open secure sign-in** opened a new top-level tab with the enabled password form. A screenshot captured the actual embedded guard. This verifies the navigation fix, not an owner-password sign-in; the separate agent browser cannot authenticate through Hoplite's external owner gate.
-- Fresh browser verification through the **rewriting proxy** confirmed the protected login form renders; the signed proof and browser-managed cookie reached password verification (401 for an intentionally wrong synthetic password); missing proof/wrong public origin returned 403; anonymous dashboard access returned 401. The check supplied the canonical public-origin header explicitly because the agent browser was on the local proxy address. This verifies the proxy/cookie protocol, not a completed owner-browser sign-in. No actual owner password was used.
-- Before `APP_URL` was configured, browser inspection confirmed private sign-in rendering, `configured: true`, `demo: false`, and anonymous dashboard rejection. The external Preview is protected by Hoplite authentication, so the agent's separate browser may be redirected to Hoplite login; never bypass that protection or claim it is owner-browser sign-in proof.
-- **Not implemented:** live payment sessions, signed payment webhooks, Shopify order writes/recovery, full shopper cart handoff, production shipping/tax parity, personalization, refunds/disputes and production operational readiness. `environment.liveEnabled` remains hard-disabled.
-
-For the detailed implementation sequence and source references, see [PAYMENT_IMPLEMENTATION_PLAN.md](PAYMENT_IMPLEMENTATION_PLAN.md), [PAYMENT_ARCHITECTURE.md](PAYMENT_ARCHITECTURE.md) and [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md).
+For design rationale and provider references, continue with `docs/PAYMENT_ARCHITECTURE.md`, `docs/PAYMENT_IMPLEMENTATION_PLAN.md`, `docs/CART_STOREFRONT_HANDOFF.md`, and Git history.
