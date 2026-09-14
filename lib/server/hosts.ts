@@ -3,6 +3,12 @@ import { HttpError } from "./errors";
 export type Site = { kind: "admin"; origin: string } | { kind: "checkout"; origin: string; slug: string };
 type RequestSite = Pick<Request, "headers" | "url">;
 
+const defaultCheckoutOrigins: Record<string, string> = {
+  "https://checkout.chefings.com": "chefings",
+  "https://checkout.cozyinfants.com": "cozyinfants",
+  "https://checkout.facejamas.com": "facejamas",
+};
+
 function parseOrigin(value: string): URL {
   let url: URL;
   try { url = new URL(value); }
@@ -14,10 +20,11 @@ function parseOrigin(value: string): URL {
 function checkoutSites(adminOrigin?: URL): Map<string, Site> {
   const sites = new Map<string, Site>();
   const raw = process.env.CHECKOUT_ORIGINS;
-  if (!raw) return sites;
-  let entries: unknown;
-  try { entries = JSON.parse(raw); }
-  catch { throw new HttpError(503, "CHECKOUT_ORIGINS must be a JSON object of origins to brand slugs."); }
+  let entries: unknown = defaultCheckoutOrigins;
+  if (raw) {
+    try { entries = JSON.parse(raw); }
+    catch { throw new HttpError(503, "CHECKOUT_ORIGINS must be a JSON object of origins to brand slugs."); }
+  }
   if (!entries || typeof entries !== "object" || Array.isArray(entries) || Object.keys(entries).length > 100) throw new HttpError(503, "CHECKOUT_ORIGINS must contain at most 100 registered origins.");
   for (const [origin, slug] of Object.entries(entries)) {
     const url = parseOrigin(origin);
