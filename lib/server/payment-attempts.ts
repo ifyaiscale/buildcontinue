@@ -20,6 +20,16 @@ export class PaymentAttempts {
     if (!row) throw new HttpError(404, "Payment attempt not found.");
     return JSON.parse(row.data as string);
   }
+  async getByKey(brandId: string, key: string): Promise<PaymentAttempt> {
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Invalid checkout reference.");
+    const row = await this.db.get("SELECT data FROM idempotency WHERE key = ?", `payment:${brandId}:${key}`);
+    if (!row) throw new HttpError(404, "Payment attempt not found.");
+    let id: unknown;
+    try { id = JSON.parse(row.data as string).id; }
+    catch { throw new HttpError(409, "Payment attempt reference is invalid."); }
+    if (typeof id !== "string" || !/^attempt_[0-9a-f-]{36}$/.test(id)) throw new HttpError(409, "Payment attempt reference is invalid.");
+    return this.get(brandId, id);
+  }
   private async save(value: PaymentAttempt) {
     await this.db.run("UPDATE payment_attempts SET data = ? WHERE id = ? AND brand_id = ?", JSON.stringify(value), value.id, value.brandId);
     return value;
