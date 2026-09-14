@@ -12,14 +12,26 @@ function errorResponse(error: unknown) {
   return Response.json({ error: "Checkout could not be started. Return to the store and try again." }, { status: 400, headers: { "Cache-Control": "no-store" } });
 }
 
-function requireStorefrontOrigin(request: Request, domains: string[]) {
+function storefrontDomains(values: string[]) {
+  const domains = new Set<string>();
+  for (const raw of values) {
+    const domain = raw.trim().toLowerCase();
+    if (!domain) continue;
+    domains.add(domain);
+    if (domain.startsWith("www.")) domains.add(domain.slice(4));
+    else domains.add(`www.${domain}`);
+  }
+  return domains;
+}
+
+function requireStorefrontOrigin(request: Request, domains: Set<string>) {
   const origin = request.headers.get("origin");
   if (!origin) throw new HttpError(403, "Open checkout from the store cart.");
   let url: URL;
   try { url = new URL(origin); }
   catch { throw new HttpError(403, "Open checkout from the store cart."); }
   if (process.env.NODE_ENV === "production" && url.protocol !== "https:") throw new HttpError(403, "Open checkout from the secure store.");
-  if (!domains.includes(url.hostname.toLowerCase())) throw new HttpError(403, "This storefront is not authorized for this checkout.");
+  if (!domains.has(url.hostname.toLowerCase())) throw new HttpError(403, "This storefront is not authorized for this checkout.");
 }
 
 export async function POST(request: Request) {
@@ -34,14 +46,17 @@ export async function POST(request: Request) {
 
     const db = await store();
     const brand = await db.brand(slug, true);
-    const domains = [brand.domain, ...(brand.accountDetails?.storefrontAliases ?? [])].map(value => value.toLowerCase()).filter(Boolean);
+    const domains = storefrontDomains([brand.domain, ...(brand.accountDetails?.storefrontAliases ?? [])]);
     requireStorefrontOrigin(request, domains);
 
     const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
     if (contentType !== "application/x-www-form-urlencoded") throw new HttpError(415, "Use a standard checkout form.");
     const contentLength = Number(request.headers.get("content-length") ?? "0");
     if (Number.isFinite(contentLength) && contentLength > 12_000) throw new HttpError(413, "Cart handoff is too large.");
-    const form = await request.formData();
+    const encoded = await request.text();
+    if (Buffer.byteLength(encoded, "utf8") > 12_000) throw new HttpError(413, "Cart handoff is too large.");
+    const form = new URLSearchParams(encoded);
+    if (form.getAll("cart").length !== 1) throw new HttpError(422, "Cart data is invalid.");
     const raw = z.string().min(2).max(8192).parse(form.get("cart"));
     let cart: unknown;
     try { cart = JSON.parse(raw); }
