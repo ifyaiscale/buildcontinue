@@ -1,10 +1,11 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Brand } from "../types";
 import type { Store } from "./store";
 import { HttpError } from "./errors";
 
 export const PERSONALIZATION_REF_PATTERN = /^pers_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const PERSONALIZATION_PROOF_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
+const ARTWORK_ACCESS_TTL_MS = 5 * 60 * 1000;
 
 export type PersonalizationCartFields = {
   personalizationRef?: string;
@@ -36,6 +37,20 @@ function receiptTable(db: Store) {
     return "facejamas_upload_receipts";
   }
   return "public.facejamas_upload_receipts";
+}
+
+function assetAccessTable(db: Store) {
+  if (db.database.sqlite) {
+    db.database.sqlite.exec(`CREATE TABLE IF NOT EXISTS facejamas_asset_access (
+      token_hash TEXT PRIMARY KEY,
+      ref TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      created_at TEXT NOT NULL
+    )`);
+    return "facejamas_asset_access";
+  }
+  return "public.facejamas_asset_access";
 }
 
 function proofHash(value: string) {
@@ -172,4 +187,68 @@ export async function finalizeFaceJamasPersonalizations(
       if (verified?.orderId !== orderId) throw new HttpError(409, "FaceJamas personalization could not be bound to the Shopify order.");
     }
   });
+}
+
+export async function openFaceJamasArtwork(
+  db: Store,
+  ref: string,
+  now = Date.now(),
+  fetchImpl: typeof fetch = fetch,
+) {
+  if (!PERSONALIZATION_REF_PATTERN.test(ref)) throw new HttpError(422, "FaceJamas personalization reference is invalid.");
+  const stored = await receipt(db, ref);
+  if (!stored?.orderId) throw new HttpError(409, "Artwork can only be opened after it is bound to a completed Shopify order.");
+
+  const anonKey = process.env.SUPABASE_PUBLIC_ANON_KEY?.trim();
+  const endpointRaw = process.env.FACEJAMAS_ASSET_URL?.trim();
+  if (!anonKey || !endpointRaw) throw new HttpError(503, "Private FaceJamas artwork access is not configured.");
+  let endpoint: URL;
+  try { endpoint = new URL(endpointRaw); }
+  catch { throw new HttpError(503, "Private FaceJamas artwork access is not configured correctly."); }
+  if (process.env.NODE_ENV === "production" && endpoint.protocol !== "https:") throw new HttpError(503, "Private FaceJamas artwork access must use HTTPS.");
+
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = proofHash(token);
+  const createdAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + ARTWORK_ACCESS_TTL_MS).toISOString();
+  await db.database.run(
+    `INSERT INTO ${assetAccessTable(db)} (token_hash, ref, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+    tokenHash,
+    ref,
+    expiresAt,
+    createdAt,
+  );
+
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+    });
+  } catch {
+    throw new HttpError(502, "Private artwork service is temporarily unavailable.");
+  }
+  const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok || typeof result.signedUrl !== "string") {
+    throw new HttpError(response.status === 410 ? 410 : 502, typeof result.error === "string" ? result.error : "Private artwork could not be opened.");
+  }
+
+  let signed: URL;
+  try { signed = new URL(result.signedUrl); }
+  catch { throw new HttpError(502, "Private artwork service returned an invalid link."); }
+  if (signed.protocol !== "https:" || signed.hostname !== "ifwljlzrhfmviwhsjhpp.supabase.co") {
+    throw new HttpError(502, "Private artwork service returned an untrusted link.");
+  }
+  return {
+    personalizationRef: ref,
+    orderId: stored.orderId,
+    signedUrl: signed.toString(),
+    expiresAt: new Date(now + ARTWORK_ACCESS_TTL_MS).toISOString(),
+  };
 }
