@@ -3,6 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const BUCKET = "personalization-assets";
 const MAX_BYTES = 10 * 1024 * 1024;
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ORDERED_SOURCE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const RATE_LIMIT = 20;
 const RATE_SALT = "facejamas-upload-v1";
 
@@ -49,6 +50,14 @@ async function clientHash(req: Request) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("cf-connecting-ip") || "unknown";
   return hex(await digest(new TextEncoder().encode(`${RATE_SALT}:${ip}`)));
 }
+async function deletePrivateSource(supabase: ReturnType<typeof createClient>, ref: string) {
+  const files = await supabase.storage.from(BUCKET).list(`facejamas/${ref}`, { limit: 10 });
+  if (files.error) return false;
+  const paths = (files.data || []).filter(file => /^source\.(?:jpg|png|webp)$/.test(file.name)).map(file => `facejamas/${ref}/${file.name}`);
+  if (!paths.length) return true;
+  const removed = await supabase.storage.from(BUCKET).remove(paths);
+  return !removed.error;
+}
 async function cleanupExpiredUploads(supabase: ReturnType<typeof createClient>) {
   const now = new Date().toISOString();
   const expired = await supabase.from("facejamas_upload_receipts")
@@ -61,14 +70,30 @@ async function cleanupExpiredUploads(supabase: ReturnType<typeof createClient>) 
     for (const row of expired.data || []) {
       const ref = typeof row.ref === "string" ? row.ref : "";
       if (!/^pers_[0-9a-f-]{36}$/i.test(ref)) continue;
-      const files = await supabase.storage.from(BUCKET).list(`facejamas/${ref}`, { limit: 10 });
-      if (!files.error) {
-        const paths = (files.data || []).filter(file => /^source\.(?:jpg|png|webp)$/.test(file.name)).map(file => `facejamas/${ref}/${file.name}`);
-        if (paths.length) await supabase.storage.from(BUCKET).remove(paths);
+      if (await deletePrivateSource(supabase, ref)) {
+        await supabase.from("facejamas_upload_receipts").delete().eq("ref", ref).is("attempt_id", null).is("order_id", null);
       }
-      await supabase.from("facejamas_upload_receipts").delete().eq("ref", ref).is("attempt_id", null).is("order_id", null);
     }
   }
+
+  const orderedCutoff = new Date(Date.now() - ORDERED_SOURCE_TTL_MS).toISOString();
+  const ordered = await supabase.from("facejamas_upload_receipts")
+    .select("ref")
+    .not("order_id", "is", null)
+    .not("order_bound_at", "is", null)
+    .lt("order_bound_at", orderedCutoff)
+    .is("source_deleted_at", null)
+    .limit(10);
+  if (!ordered.error) {
+    for (const row of ordered.data || []) {
+      const ref = typeof row.ref === "string" ? row.ref : "";
+      if (!/^pers_[0-9a-f-]{36}$/i.test(ref)) continue;
+      if (await deletePrivateSource(supabase, ref)) {
+        await supabase.from("facejamas_upload_receipts").update({ source_deleted_at: now }).eq("ref", ref).not("order_id", "is", null).is("source_deleted_at", null);
+      }
+    }
+  }
+
   const eventCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   await supabase.from("facejamas_upload_events").delete().lt("created_at", eventCutoff);
 }
