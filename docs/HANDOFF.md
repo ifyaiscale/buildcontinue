@@ -74,6 +74,13 @@ The prepared Shopify themes contain per-brand cart drawers and checkout bridges 
 9. Only after acceptance succeeds, enable public payment and activate brands live.
 10. Add final approved hero/product/GIF/review media last through Shopify Theme Editor.
 
+## 2026-09-14 checkout host hotfix
+
+- Netlify HTTPS certificate was renewed to cover `checkout.chefings.com`, `checkout.cozyinfants.com`, and `checkout.facejamas.com`.
+- Production `CHECKOUT_ORIGINS` was reset to the exact three HTTPS origins mapped to `chefings`, `cozyinfants`, and `facejamas`.
+- This handoff update intentionally triggers a fresh production deploy so the Next.js runtime receives the corrected host mapping.
+- Public payment remains disabled during this no-charge checkout QA.
+
 ## Definition of done
 
 A customer can start on a Shopify-hosted brand storefront, pass a server-authenticated cart to the matching branded Limitless checkout, review an authoritative Shopify-calculated USD total, pay exactly that amount through Whop, and receive confirmation only after exactly one corresponding Shopify order exists with all required fulfillment data. Retries and duplicate notifications must never create duplicate orders or ask a paid customer to pay again.
