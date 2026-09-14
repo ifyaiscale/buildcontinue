@@ -30,10 +30,13 @@ function checkoutSites(adminOrigin?: URL): Map<string, Site> {
 
 export function requestSite(request: RequestSite): Site {
   const url = new URL(request.url);
-  const host = (request.headers.get("host") || url.host).toLowerCase();
   const admin = process.env.APP_URL ? parseOrigin(process.env.APP_URL) : undefined;
   if (!admin && process.env.NODE_ENV === "production") throw new HttpError(503, "Configure APP_URL with the application origin before serving requests.");
   const sites = checkoutSites(admin);
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim().toLowerCase();
+  const directHost = (request.headers.get("host") || url.host).toLowerCase();
+  const urlHost = url.host.toLowerCase();
+  const host = [forwardedHost, directHost, urlHost].find(candidate => candidate && (sites.has(candidate) || admin?.host === candidate)) || directHost;
   const checkout = sites.get(host);
   if (checkout) return checkout;
   if (admin?.host === host) return { kind: "admin", origin: admin.origin };
