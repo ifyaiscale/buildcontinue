@@ -2,6 +2,12 @@
 
 Last updated: 2026-09-13. Read this first when resuming work, then inspect the current checkout and live environment. Historical screenshots are not evidence of current state.
 
+## Durable payment retry worker
+
+Successful signed Whop notifications now enqueue a deduplicated payment job before acknowledgment. A Netlify schedule dispatches an authenticated background worker once per minute. Jobs retain an expiring lease, bounded exponential retry delays, and a review state after repeated failures; review adds an administrator activity entry without provider error details or customer data. A crashed worker can be reclaimed, and each retry still independently verifies the payment and completes only its original Shopify draft. The existing private inbox table holds jobs, so no migration is required. Tests cover concurrent claims, duplicate notification conflicts, delayed retry, completion deduplication and trigger authentication.
+
+The production administrator acceptance flag was set true in the preceding session (superseding the stale unset statement below). Public checkout remains hard-disabled. Product sync now shows all three FACEJAMAS products and CHEFINGS Green/White variants. No live payment has been performed. Remaining: provider contract/delivery acceptance, actual Shopify cart and personalization handoff, Shopify confirmation return, and customer launch checks. Do not imply the remaining work is only a test payment.
+
 ## Administrator payment acceptance shipment — 2026-09-13
 
 **Automatic Whop success processing added:** signed `payment.succeeded` deliveries now route only payments carrying a valid `limitless_attempt_id` through the same independent Whop lookup and exactly-once Shopify draft completion path. Other company payments and non-success events are acknowledged without fulfillment. Duplicate delivery remains safe because event recording, payment claiming, completion leasing, and immutable order binding are all idempotent. Whop's current documentation confirms at-least-once, unordered delivery and recommends prompt acknowledgement; the current synchronous provider reconciliation must still be moved to a durable background worker before public traffic.

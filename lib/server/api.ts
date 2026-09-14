@@ -10,6 +10,7 @@ import { calculatePaymentQuote } from "./payment-quote";
 import { calculateLaunchQuote } from "./launch-quote";
 import { verifyWhopWebhook } from "./whop-webhook";
 import { startPayment, reconcilePayment, whopPaymentReference } from "./payment-service";
+import { enqueuePayment } from "./payment-jobs";
 import { z } from "zod";
 
 function publicBrand(brand: Brand): Brand {
@@ -38,7 +39,7 @@ export async function handleApi(request: Request): Promise<Response> {
     const resourceId = typeof event.data.id === "string" ? event.data.id : undefined;
     const recorded = await db.recordWebhookEvent(brand.id, { id: event.id, type: event.type, accountId, ...(resourceId ? { resourceId } : {}), receivedAt: new Date().toISOString() });
     const payment = whopPaymentReference(event);
-    if (payment) await reconcilePayment(db, brand.id, payment.attemptId, payment.paymentId);
+    if (payment) await enqueuePayment(db, brand.id, payment);
     return json({ received: true, duplicate: recorded.duplicate, processed: Boolean(payment) });
   }
   if (path === "/api/auth/csrf" && method === "GET") {
