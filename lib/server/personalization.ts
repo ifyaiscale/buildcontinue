@@ -189,6 +189,21 @@ export async function finalizeFaceJamasPersonalizations(
   });
 }
 
+export async function listFaceJamasFulfillmentArtwork(db: Store) {
+  const rows = await db.database.all(
+    `SELECT ref, order_id, attached_at, created_at FROM ${receiptTable(db)} WHERE order_id IS NOT NULL ORDER BY attached_at DESC LIMIT 100`,
+  );
+  return rows.flatMap(row => {
+    if (typeof row.ref !== "string" || typeof row.order_id !== "string") return [];
+    return [{
+      personalizationRef: row.ref,
+      orderId: row.order_id,
+      attachedAt: typeof row.attached_at === "string" ? row.attached_at : null,
+      createdAt: typeof row.created_at === "string" ? row.created_at : null,
+    }];
+  });
+}
+
 export async function openFaceJamasArtwork(
   db: Store,
   ref: string,
@@ -249,6 +264,6 @@ export async function openFaceJamasArtwork(
     personalizationRef: ref,
     orderId: stored.orderId,
     signedUrl: signed.toString(),
-    expiresAt: new Date(now + ARTWORK_ACCESS_TTL_MS).toISOString(),
+    expiresAt,
   };
 }
