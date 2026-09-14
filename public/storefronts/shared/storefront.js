@@ -74,8 +74,9 @@
     if(cfg.checkoutEnabled===false){ alert(cfg.checkoutDisabledMessage||'Checkout is not available yet.'); return; }
     if(!window.LimitlessCheckout){ alert('Secure checkout is still loading. Please try again.'); return; }
     const items=[...cart.values()].map(({variantId,quantity,personalizationRef,personalizationProof})=>({variantId,quantity,...(personalizationRef?{personalizationRef,personalizationProof}:{})}));
+    const checkoutOrigin=cfg.checkoutOrigin||('https://checkout.'+cfg.brandSlug+'.com');
     track('begin_checkout',{itemCount:cartCount(),lineCount:cart.size,displayValue:cartTotal(),personalized:items.some(item=>Boolean(item.personalizationRef))});
-    window.LimitlessCheckout.start({brandSlug:cfg.brandSlug,items,checkoutOrigin:cfg.checkoutOrigin});
+    window.LimitlessCheckout.start({brandSlug:cfg.brandSlug,items,checkoutOrigin});
   }
   $$('[data-add]').forEach(b=>b.addEventListener('click',()=>addProduct(b)));
   $$('[data-open-cart]').forEach(b=>b.addEventListener('click',openCart));
