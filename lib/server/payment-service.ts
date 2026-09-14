@@ -26,6 +26,16 @@ async function connections(db: Store, brandId: string, attempt?: PaymentAttempt)
   return { brand, shopify, whop };
 }
 
+function embeddedCheckoutMetadata(attempt: PaymentAttempt) {
+  if (!attempt.checkoutId || !attempt.purchaseUrl) throw new HttpError(409, "Payment checkout is not ready for embedding.");
+  const purchaseUrl = new URL(attempt.purchaseUrl, "https://whop.com");
+  if (purchaseUrl.protocol !== "https:" || !/(^|\.)whop\.com$/.test(purchaseUrl.hostname)) throw new HttpError(502, "Whop returned an invalid checkout URL.");
+  const planId = purchaseUrl.pathname.match(/(?:^|\/)checkout\/(plan_[A-Za-z0-9]+)\/?$/)?.[1];
+  const sessionId = purchaseUrl.searchParams.get("session") || attempt.checkoutId;
+  if (!planId || !/^plan_[A-Za-z0-9]+$/.test(planId) || !/^ch_[A-Za-z0-9]+$/.test(sessionId) || sessionId !== attempt.checkoutId) throw new HttpError(502, "Whop returned an invalid embedded checkout session.");
+  return { planId, sessionId };
+}
+
 // Admin acceptance can omit expectedTotalCents. Shopper flows must pass the exact
 // cents most recently reviewed by the buyer; Shopify remains authoritative.
 export async function startPayment(db: Store, brandId: string, raw: unknown, key: string, returnUrl: string, expectedTotalCents?: number) {
@@ -62,7 +72,8 @@ export async function startPayment(db: Store, brandId: string, raw: unknown, key
     attempt = await ledger.bindCheckout(brandId, attempt.id, checkout.checkoutConfigurationId, Date.now(), checkout.purchaseUrl);
   }
   if (attempt.state !== "checkout_ready" || attempt.expiresAt <= Date.now()) throw new HttpError(409, "This attempt cannot start another payment.");
-  return { attemptId: attempt.id, purchaseUrl: attempt.purchaseUrl, totalCents: attempt.totalCents, currency: attempt.currency, expiresAt: attempt.expiresAt };
+  const embed = embeddedCheckoutMetadata(attempt);
+  return { attemptId: attempt.id, purchaseUrl: attempt.purchaseUrl, ...embed, totalCents: attempt.totalCents, currency: attempt.currency, expiresAt: attempt.expiresAt };
 }
 
 export async function reconcilePayment(db: Store, brandId: string, attemptId: string, paymentId: string) {
