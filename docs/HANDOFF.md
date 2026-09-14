@@ -1,6 +1,6 @@
 # Limitless Checkout — current handoff
 
-Last updated: 2026-09-13. This is the current operational checkpoint. Use Git history and the linked architecture docs for older implementation history; superseded screenshots/notes are not current evidence.
+Last updated: 2026-09-13. This is the current operational checkpoint. Use Git history and linked architecture docs for older implementation history; superseded screenshots/notes are not current evidence.
 
 ## Current state
 
@@ -9,14 +9,15 @@ Production branch: `hoplite/beroia-65b17429`.
 Merged foundation:
 - PR #1 / `e0be107d…`: encrypted storefront cart handoff into Limitless Checkout.
 - PR #2 / `589edeb…`: shopper cart → authoritative Shopify quote → fail-closed Whop payment start → encrypted return receipt → durable payment/Shopify-order confirmation.
+- PR #3 / `4ec7e426…`: controlled live activation requiring a completed acceptance purchase and current launch readiness.
 
-Active PR #3: **Gate live checkout behind controlled acceptance** on `chatgpt/controlled-live-activation`.
+Active PR #4: **Add versioned storefront checkout bridge** on `chatgpt/storefront-bridge`.
 
 Customer charging remains OFF. No real Whop payment has been performed. Netlify production deploys are paused by the team credit allowance; deploy previews remain available. The owner plans to upgrade after the build work is complete.
 
-## Shopper payment flow now implemented
+## Shopper payment flow implemented
 
-1. Storefront sends only Shopify variant IDs + quantities to the existing cart-start contract.
+1. Storefront sends only Shopify variant IDs + quantities to the cart-start contract.
 2. Limitless normalizes against the synced brand catalog and creates a short-lived encrypted brand-bound cart token.
 3. Checkout collects email/delivery data and requests `POST /api/checkout/:slug/quote`.
 4. Shopify is authoritative for current variant availability/inventory, merchandise, tax and total. Standard shipping is free; optional priority processing is $4.99 once/order.
@@ -30,9 +31,9 @@ Customer charging remains OFF. No real Whop payment has been performed. Netlify 
 
 No card numbers are collected by Limitless; Whop hosts payment collection.
 
-## Controlled live activation — PR #3
+## Controlled live activation — merged PR #3
 
-Live publishing is no longer intended to depend on a single environment toggle. PR #3 adds a two-key activation model:
+Live publishing no longer depends on a single environment toggle.
 
 - `GET /api/brands/:id/launch-readiness` reports launch checks.
 - `POST /api/brands/:id/launch-acceptance` records a completed controlled acceptance attempt.
@@ -51,7 +52,22 @@ A brand can become `status=live` + `mode=live` only when all of these are true:
 
 The acceptance record is stored in the existing private metadata table; no schema migration is required. It is bound to the completed attempt/order, provider accounts, total, and a fingerprint of launch-critical brand state. Product/catalog, storefront-domain, provider-account, shipping-policy or priority-price changes invalidate acceptance and require another controlled acceptance purchase before live activation.
 
-Direct `Store.publish(..., "live")` remains blocked, so internal callers cannot bypass the launch-readiness gate. Demo publishing remains available as an immediate non-payment fallback.
+Direct `Store.publish(..., "live")` remains blocked, so internal callers cannot bypass the launch-readiness gate. Demo publishing remains available as a non-payment fallback.
+
+## Storefront bridge — PR #4
+
+`public/limitless-storefront-v1.js` is a versioned browser adapter intended for the existing static CHEFINGS, COZYINFANTS and FACEJAMAS storefronts. It:
+- accepts only Shopify numeric/GID variant IDs and integer quantities;
+- strips browser price/title/payment/UI fields from the serialized handoff;
+- rejects duplicate Shopify variants and invalid quantities;
+- uses a normal hidden form POST so the browser supplies the actual storefront `Origin` for the server's independent origin check;
+- contains no Shopify Admin, Whop or other credentials.
+
+`docs/STOREFRONT_BRIDGE.md` records the current synced Shopify variant mapping and adapter examples for all three brands. COZYINFANTS' priority-processing Shopify variant is explicitly excluded from the bag because Limitless owns the once-per-order $4.99 priority option.
+
+The existing ChatGPT Sites source itself is still inaccessible in this chat. Library contains the active COZYINFANTS Site projection and the storefront handoff, but Site projections cannot be materialized into source, the exact prior `app.js` text was not preserved in chat, and no Sites source connector is exposed. Do not recreate/overwrite the Sites projects from the text projection. When source access is restored, integration should be a small script include + Checkout handler edit using the bridge rather than a storefront rewrite.
+
+FACEJAMAS must not launch merely by adding this bridge: its current prototype stores customer photos only in-browser. Durable private upload, access controls and a fulfillment-safe personalization reference are required first.
 
 ## Current real brand/provider state — supersedes old connection notes
 
@@ -74,24 +90,19 @@ Do not repeat old instructions claiming COZYINFANTS still needs Whop connection 
 - Priority processing: optional, unchecked by default, $4.99 USD once/order.
 - Browser-provided product prices, shipping prices, tax and totals are never authoritative.
 
-## Storefront source boundary
-
-CHEFINGS / COZYINFANTS / FACEJAMAS storefront source remains in separate Sites-managed projects not exposed through the current GitHub connector. Their existing Checkout buttons still need to call the already-documented form POST in `docs/CART_STOREFRONT_HANDOFF.md` when that source becomes accessible. Do not invent a second cart protocol.
-
-FACEJAMAS additionally requires durable private artwork/photo storage and a fulfillment-safe personalization reference before that brand can launch. Do not place raw/base64 customer artwork in cart tokens or public URLs.
-
 ## Deployment / verification
 
 - PR #2 final Netlify deploy preview succeeded at commit `027aed87…`; it included the reviewed-total lock and shopper routes.
-- PR #3 Netlify deploy preview succeeded at commit `ae12d69…`, including physical Next.js routes for launch readiness/acceptance and the existing payment worker functions.
+- PR #3 final Netlify deploy preview succeeded before merge; production branch merged at `4ec7e426…`.
+- PR #4 Netlify deploy preview succeeded at commit `64f1ef11…`; the versioned storefront bridge was included in the built static assets.
 - Netlify production remains on an older deploy because production deploys are paused by exhausted team credits. Do not claim merged code is live until production reports the matching commit ready.
-- The repository's Netlify build command validates the production Next.js build. Do not describe that as the full Node test suite unless the test runner was separately executed.
+- The repository's Netlify build validates the production Next.js build. Do not describe that as the full Node test suite unless the test runner was separately executed.
 
 ## Next actions — ordered
 
-1. Merge PR #3 after its final status remains green. Keep `PUBLIC_PAYMENT_ENABLED` off.
-2. When storefront source is accessible, wire COZYINFANTS Checkout to the existing cart handoff; then CHEFINGS/FACEJAMAS.
-3. After Netlify upgrade, production-deploy the verified branch and confirm exact commit/function deployment. Upgrading hosting does not enable payments.
+1. Merge PR #4 after the final handoff-doc preview remains green. Keep `PUBLIC_PAYMENT_ENABLED` off.
+2. After the owner upgrades Netlify, production-deploy the verified branch and confirm the exact commit, static bridge asset and functions are ready. Upgrading hosting does not enable payments.
+3. When the existing Sites source workspace/connector is accessible, wire COZYINFANTS's current Checkout button to `LimitlessCheckout.start(...)` using the existing in-memory bag and current variant mapping. Then CHEFINGS. FACEJAMAS waits for personalization storage.
 4. Exercise COZYINFANTS cart → delivery → authoritative Shopify quote with customer payment still locked.
 5. Verify COZYINFANTS payment-specific Whop readiness, especially the saved webhook secret/callback delivery. Never request secrets in chat.
 6. On explicit owner authorization, run one controlled acceptance purchase using the administrator acceptance path. Verify signed callback, independent Whop lookup, exactly one Shopify order, worker recovery and return status.
@@ -102,4 +113,4 @@ FACEJAMAS additionally requires durable private artwork/photo storage and a fulf
 
 A real customer can start at a brand storefront, pass a server-authenticated cart into Limitless, review an authoritative Shopify-calculated USD total, pay exactly that amount through Whop, and receive confirmation only after exactly one corresponding paid Shopify order exists with the required fulfillment details. Retries, duplicate notifications and paid-but-delayed synchronization must never create duplicate orders or tell a paid customer to pay again.
 
-See `docs/PAYMENT_ARCHITECTURE.md`, `docs/PAYMENT_IMPLEMENTATION_PLAN.md`, `docs/CART_STOREFRONT_HANDOFF.md`, and Git history for detail.
+See `docs/PAYMENT_ARCHITECTURE.md`, `docs/PAYMENT_IMPLEMENTATION_PLAN.md`, `docs/CART_STOREFRONT_HANDOFF.md`, `docs/STOREFRONT_BRIDGE.md`, and Git history for detail.
