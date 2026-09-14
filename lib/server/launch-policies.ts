@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Brand } from "../types";
+import { checkoutExperience } from "../checkout";
 import type { Store } from "./store";
 import { HttpError } from "./errors";
 
@@ -102,6 +103,16 @@ export async function approveLaunchPolicy(db: Store, brandId: string, acknowledg
   return db.transaction(async () => {
     const brand = await db.brand(brandId);
     if (!brand.supportEmail.trim()) throw new HttpError(409, "Configure a real monitored support email before approving launch policies.");
+
+    const policy = launchPolicy(brand);
+    const experience = checkoutExperience(brand);
+    brand.checkoutExperience = {
+      ...experience,
+      deliveryText: "Free standard shipping on every order. Optional priority processing is $4.99 and does not change the shipping service.",
+      returnsText: policy.returns.returns,
+    };
+    await db.saveBrand(brand);
+
     const record: LaunchPolicyApproval = {
       version: LAUNCH_POLICY_VERSION,
       brandId: brand.id,
@@ -114,6 +125,6 @@ export async function approveLaunchPolicy(db: Store, brandId: string, acknowledg
       JSON.stringify(record),
     );
     await db.addActivity(`${brand.name}: customer launch policies approved`, "brand", brand.id);
-    return { approved: true, approvedAt: record.approvedAt, policyHash: record.policyHash };
+    return { approved: true, approvedAt: record.approvedAt, policyHash: record.policyHash, brand };
   });
 }
