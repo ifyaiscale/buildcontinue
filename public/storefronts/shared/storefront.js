@@ -4,6 +4,12 @@
   const cart=new Map();
   const $=(q,r=document)=>r.querySelector(q); const $$=(q,r=document)=>[...r.querySelectorAll(q)];
   const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
+  function track(event,detail={}){
+    const payload={event,brand:cfg.brandSlug,currency:'USD',...detail};
+    try{window.dispatchEvent(new CustomEvent('limitless:commerce',{detail:payload}));}catch{}
+    if(Array.isArray(window.dataLayer))window.dataLayer.push(payload);
+  }
+  window.LimitlessStorefrontAnalytics=Object.freeze({track});
   function setupMedia(){
     $$('.media-shell img,.media-shell video').forEach(el=>{
       const shell=el.closest('.media-shell');
@@ -32,7 +38,12 @@
       const row=document.createElement('div'); row.className='cart-line';
       const personalized=item.personalizationRef?'<span class="cart-personalized">✓ Personalized photo attached</span>':'';
       row.innerHTML=`<div><strong>${item.name}</strong><span>${item.quantity} × ${money(item.price)}</span>${personalized}</div><button type="button" aria-label="Remove ${item.name}">Remove</button>`;
-      row.querySelector('button').onclick=()=>{cart.delete(item.variantId);refreshCart()}; list.append(row);
+      row.querySelector('button').onclick=()=>{
+        cart.delete(item.variantId);
+        track('remove_from_cart',{variantId:item.variantId,quantity:item.quantity,displayValue:item.price*item.quantity});
+        refreshCart();
+      };
+      list.append(row);
     }
     $('#cart-total').textContent=money(cartTotal());
   }
@@ -52,7 +63,9 @@
     const prev=cart.get(variantId);
     const samePersonalization=!cfg.personalizationRequired || prev?.personalizationRef===personal.personalizationRef;
     const quantity=samePersonalization?Math.min(20,(prev?.quantity||0)+qty):qty;
-    cart.set(variantId,{variantId,name,price,quantity,...personal}); refreshCart(); openCart();
+    cart.set(variantId,{variantId,name,price,quantity,...personal});
+    track('add_to_cart',{variantId,name,quantity:qty,displayUnitPrice:price,displayValue:price*qty,personalized:Boolean(personal.personalizationRef)});
+    refreshCart(); openCart();
   }
   function openCart(){ $('#cart-drawer')?.classList.add('open'); document.body.style.overflow='hidden'; }
   function closeCart(){ $('#cart-drawer')?.classList.remove('open'); document.body.style.overflow=''; }
@@ -61,6 +74,7 @@
     if(cfg.checkoutEnabled===false){ alert(cfg.checkoutDisabledMessage||'Checkout is not available yet.'); return; }
     if(!window.LimitlessCheckout){ alert('Secure checkout is still loading. Please try again.'); return; }
     const items=[...cart.values()].map(({variantId,quantity,personalizationRef,personalizationProof})=>({variantId,quantity,...(personalizationRef?{personalizationRef,personalizationProof}:{})}));
+    track('begin_checkout',{itemCount:cartCount(),lineCount:cart.size,displayValue:cartTotal(),personalized:items.some(item=>Boolean(item.personalizationRef))});
     window.LimitlessCheckout.start({brandSlug:cfg.brandSlug,items});
   }
   $$('[data-add]').forEach(b=>b.addEventListener('click',()=>addProduct(b)));
@@ -69,4 +83,6 @@
   $('#checkout-button')?.addEventListener('click',checkout);
   $('#sticky-cart')?.addEventListener('click',()=>cart.size?openCart():document.querySelector('#shop')?.scrollIntoView({behavior:'smooth'}));
   setupMedia();refreshCart();
+  const products=$$('[data-product]').map(card=>({variantId:card.dataset.variant,name:card.dataset.name,displayPrice:Number(card.dataset.price)}));
+  track('view_item_list',{products});
 })();
