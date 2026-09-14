@@ -11,7 +11,8 @@ import { calculateLaunchQuote } from "./launch-quote";
 import { verifyWhopWebhook } from "./whop-webhook";
 import { startPayment, reconcilePayment, whopPaymentReference } from "./payment-service";
 import { enqueuePayment } from "./payment-jobs";
-import { customerPaymentStatus, quoteCustomerCheckout, startCustomerCheckoutPayment } from "./customer-checkout";
+import { customerPaymentStatus, publicPaymentEnabled, quoteCustomerCheckout, startCustomerCheckoutPayment } from "./customer-checkout";
+import { activateLiveCheckout, launchReadiness, recordLaunchAcceptance } from "./launch-activation";
 import { z } from "zod";
 
 function publicBrand(brand: Brand): Brand {
@@ -62,7 +63,7 @@ export async function handleApi(request: Request): Promise<Response> {
     requireAdmin(request);
     const db = await store();
     const [brands, orders, activity] = await Promise.all([db.brands(), db.orders(), db.activity()]);
-    const state: AppState = { brands, orders, activity, environment: { demo: demoMode(), liveEnabled: false, credentialsConfigured: authConfigured() && encryptionConfigured(), authenticated: authenticated(request) } };
+    const state: AppState = { brands, orders, activity, environment: { demo: demoMode(), liveEnabled: publicPaymentEnabled(), credentialsConfigured: authConfigured() && encryptionConfigured(), authenticated: authenticated(request) } };
     return json(state);
   }
   if (path === "/api/brands" && method === "POST") {
@@ -105,10 +106,19 @@ export async function handleApi(request: Request): Promise<Response> {
     if (key && !/^[a-zA-Z0-9_-]{8,100}$/.test(key)) throw new HttpError(422, "Use an 8–100 character alphanumeric idempotency key.");
     return json(await db.checkout(slug, await body(request), allowDraft, key), 201);
   }
-  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote|launch-quote|payment-start|payment-reconcile))?$/);
+  const brandRoute = path.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)(?:\/(connections|products\/sync|products|publish|payment-quote|launch-quote|payment-start|payment-reconcile|launch-readiness|launch-acceptance))?$/);
   if (brandRoute) {
     const [, brandId, action] = brandRoute;
     requireAdmin(request);
+    if (action === "launch-readiness" && method === "GET") {
+      requireCredentials(request);
+      return json(await launchReadiness(await store(), brandId));
+    }
+    if (action === "launch-acceptance" && method === "POST") {
+      requireCredentials(request); rateLimit("launch-acceptance", 10, 60000);
+      const input = z.object({ attemptId: z.string().regex(/^attempt_[0-9a-f-]{36}$/) }).strict().parse(await body(request));
+      return json(await recordLaunchAcceptance(await store(), brandId, input.attemptId), 201);
+    }
     if (action === "payment-start" && method === "POST") {
       requireCredentials(request); rateLimit("payment-start", 10, 60000);
       return json(await startPayment(await store(), brandId, await body(request), request.headers.get("idempotency-key") ?? "", `${site.origin}/`));
@@ -133,7 +143,14 @@ export async function handleApi(request: Request): Promise<Response> {
       rateLimit("test-product-create", 60, 60000);
       return json(await (await store()).addTestProduct(brandId, await body(request)), 201);
     }
-    if (action === "publish" && method === "POST") return json(await (await store()).publish(brandId, publishInput.parse(await body(request)).mode));
+    if (action === "publish" && method === "POST") {
+      const input = publishInput.parse(await body(request));
+      if (input.mode === "live") {
+        requireCredentials(request); rateLimit("live-activation", 5, 60000);
+        return json(await activateLiveCheckout(await store(), brandId));
+      }
+      return json(await (await store()).publish(brandId, "demo"));
+    }
     if (action === "connections" && method === "POST") {
       requireCredentials(request); rateLimit("connections", 20, 60000);
       const input = connectionInput.parse(await body(request)); const db = await store(); await db.brand(brandId);
