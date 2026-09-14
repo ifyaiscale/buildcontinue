@@ -25,6 +25,15 @@ const draftFields = `id status email reserveInventoryUntil customAttributes { ke
 
 export type DraftBinding = { attemptId: string; email: string; expiresAt: number; quote: Quote };
 export function draftTag(attemptId: string) { return `limitless_${createHash("sha256").update(attemptId).digest("hex")}`; }
+
+function normalizedAttributes(values: Array<{ key: string; value: string }> | undefined) {
+  return [...(values ?? [])].map(item => ({ key: item.key, value: item.value })).sort((a, b) => `${a.key}\u0000${a.value}`.localeCompare(`${b.key}\u0000${b.value}`));
+}
+
+function merchandiseKey(variantId: string, quantity: number, customAttributes?: Array<{ key: string; value: string }>) {
+  return JSON.stringify({ variantId, quantity, customAttributes: normalizedAttributes(customAttributes) });
+}
+
 export function validateShopifyDraft(raw: unknown, binding: DraftBinding, requireReservation = true) {
   const parsed = draftSchema.safeParse(raw);
   if (!parsed.success) throw new HttpError(502, "Shopify returned an incomplete draft. Reconciliation is required.");
@@ -37,9 +46,20 @@ export function validateShopifyDraft(raw: unknown, binding: DraftBinding, requir
     if ((draft.shippingAddress[key] ?? "") !== (address[key] ?? "")) throw new HttpError(409, "Shopify draft delivery address changed.");
   }
   if (draft.shippingAddress.countryCodeV2 !== address.countryCode) throw new HttpError(409, "Shopify draft destination changed.");
-  const expected = quote.draftInput.lineItems.map(line => "variantId" in line ? `${line.variantId}:${line.quantity}` : `priority:${line.quantity}` ).sort();
-  const actual = draft.lineItems.nodes.map(line => line.variant ? `${line.variant.id}:${line.quantity}` : line.title === "Priority processing" ? `priority:${line.quantity}` : "unsupported").sort();
-  if (draft.lineItems.pageInfo.hasNextPage || JSON.stringify(expected) !== JSON.stringify(actual) || draft.lineItems.nodes.some(line => line.customAttributes.length)) throw new HttpError(409, "Shopify draft items changed or contain unsupported properties.");
+
+  const expected = quote.draftInput.lineItems.map(line => {
+    if ("variantId" in line) {
+      return merchandiseKey(line.variantId, line.quantity, "customAttributes" in line ? line.customAttributes : undefined);
+    }
+    return JSON.stringify({ priority: true, quantity: line.quantity, customAttributes: [] });
+  }).sort();
+  const actual = draft.lineItems.nodes.map(line => {
+    if (line.variant) return merchandiseKey(line.variant.id, line.quantity, line.customAttributes);
+    if (line.title === "Priority processing") return JSON.stringify({ priority: true, quantity: line.quantity, customAttributes: normalizedAttributes(line.customAttributes) });
+    return "unsupported";
+  }).sort();
+  if (draft.lineItems.pageInfo.hasNextPage || JSON.stringify(expected) !== JSON.stringify(actual)) throw new HttpError(409, "Shopify draft items or personalization properties changed.");
+
   if (draft.status === "COMPLETED") {
     if (!draft.order || draft.order.displayFinancialStatus !== "PAID") throw new HttpError(409, "Shopify order is not marked paid.");
   } else {
