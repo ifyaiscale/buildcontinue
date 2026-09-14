@@ -24,6 +24,12 @@ export const customerCheckoutInput = paymentQuoteInput.pick({ shippingAddress: t
   priority: z.boolean().default(false),
 }).strict();
 
+export const customerPaymentStartInput = customerCheckoutInput.extend({
+  confirmedTotalCents: z.number().int().min(50).max(10_000_000),
+}).strict();
+
+type CustomerCheckoutInput = z.infer<typeof customerCheckoutInput>;
+
 export function publicPaymentEnabled() {
   return process.env.PUBLIC_PAYMENT_ENABLED === "true" && process.env.PAYMENT_ACCEPTANCE_ENABLED === "true";
 }
@@ -49,8 +55,7 @@ function readCustomerReceipt(brand: { id: string; slug: string }, token: string,
   return parsed.data;
 }
 
-async function loadCustomerContext(db: Store, slug: string, raw: unknown) {
-  const input = customerCheckoutInput.parse(raw);
+async function loadCustomerContext(db: Store, slug: string, input: CustomerCheckoutInput) {
   const brand = await db.brand(slug, true);
   const cart = readCartSession(brand, input.cartToken);
   const shopify = await db.credential<ShopifyCredentials>(brand.id, "shopify");
@@ -59,7 +64,8 @@ async function loadCustomerContext(db: Store, slug: string, raw: unknown) {
 }
 
 export async function quoteCustomerCheckout(db: Store, slug: string, raw: unknown) {
-  const { input, brand, cart, shopify } = await loadCustomerContext(db, slug, raw);
+  const input = customerCheckoutInput.parse(raw);
+  const { brand, cart, shopify } = await loadCustomerContext(db, slug, input);
   const quote = await calculateLaunchQuote(brand, shopify, {
     items: cart.items,
     shippingAddress: input.shippingAddress,
@@ -76,7 +82,8 @@ export async function quoteCustomerCheckout(db: Store, slug: string, raw: unknow
 
 export async function startCustomerCheckoutPayment(db: Store, slug: string, raw: unknown, key: string, origin: string) {
   if (!publicPaymentEnabled()) throw new HttpError(409, "Customer payments are not enabled yet.");
-  const { input, brand, cart } = await loadCustomerContext(db, slug, raw);
+  const input = customerPaymentStartInput.parse(raw);
+  const { brand, cart } = await loadCustomerContext(db, slug, input);
   if (brand.status !== "live" || brand.mode !== "live") throw new HttpError(409, "This checkout is not published for live payment yet.");
   const receipt = createCustomerReceipt(brand, key);
   const returnUrl = new URL(`/checkout/${encodeURIComponent(brand.slug)}`, origin);
@@ -86,7 +93,7 @@ export async function startCustomerCheckoutPayment(db: Store, slug: string, raw:
     items: cart.items,
     shippingAddress: input.shippingAddress,
     priority: input.priority,
-  }, key, returnUrl.toString());
+  }, key, returnUrl.toString(), input.confirmedTotalCents);
   return {
     purchaseUrl: started.purchaseUrl,
     totalCents: started.totalCents,
