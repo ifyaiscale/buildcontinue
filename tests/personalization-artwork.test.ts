@@ -6,13 +6,14 @@ import { listFaceJamasFulfillmentArtwork, openFaceJamasArtwork } from "../lib/se
 
 const ref = "pers_123e4567-e89b-42d3-a456-426614174000";
 
-async function fixture(orderId: string | null) {
+async function fixture(orderId: string | null, sourceDeletedAt: string | null = null) {
   const db = new Store(":memory:");
   db.db.exec(`
     CREATE TABLE facejamas_upload_receipts (
       ref TEXT PRIMARY KEY, proof_hash TEXT NOT NULL, content_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL, attempt_id TEXT, order_id TEXT, attached_at TEXT
+      created_at TEXT NOT NULL, attempt_id TEXT, order_id TEXT, attached_at TEXT,
+      order_bound_at TEXT, source_deleted_at TEXT
     );
     CREATE TABLE facejamas_asset_access (
       token_hash TEXT PRIMARY KEY, ref TEXT NOT NULL, expires_at TEXT NOT NULL,
@@ -20,7 +21,7 @@ async function fixture(orderId: string | null) {
     );
   `);
   await db.database.run(
-    "INSERT INTO facejamas_upload_receipts (ref, proof_hash, content_type, size_bytes, sha256, expires_at, created_at, attempt_id, order_id, attached_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO facejamas_upload_receipts (ref, proof_hash, content_type, size_bytes, sha256, expires_at, created_at, attempt_id, order_id, attached_at, order_bound_at, source_deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ref,
     createHash("sha256").update("proof").digest("hex"),
     "image/jpeg",
@@ -31,8 +32,11 @@ async function fixture(orderId: string | null) {
     "attempt_11111111-1111-4111-8111-111111111111",
     orderId ?? "",
     "2026-09-14T00:02:00.000Z",
+    orderId ? "2026-09-14T00:03:00.000Z" : "",
+    sourceDeletedAt ?? "",
   );
-  if (orderId === null) await db.database.run("UPDATE facejamas_upload_receipts SET order_id = NULL WHERE ref = ?", ref);
+  if (orderId === null) await db.database.run("UPDATE facejamas_upload_receipts SET order_id = NULL, order_bound_at = NULL WHERE ref = ?", ref);
+  if (sourceDeletedAt === null) await db.database.run("UPDATE facejamas_upload_receipts SET source_deleted_at = NULL WHERE ref = ?", ref);
   return db;
 }
 
@@ -48,15 +52,17 @@ async function withEnv<T>(fn: () => Promise<T>) {
   }
 }
 
-test("fulfillment list exposes only order-bound IDs, not proof hashes or object paths", async () => {
+test("fulfillment list exposes order binding and retention state without proof hashes or object paths", async () => {
   const db = await fixture("gid://shopify/Order/12345");
   try {
     const items = await listFaceJamasFulfillmentArtwork(db);
     assert.deepEqual(items, [{
       personalizationRef: ref,
       orderId: "gid://shopify/Order/12345",
+      orderBoundAt: "2026-09-14T00:03:00.000Z",
       attachedAt: "2026-09-14T00:02:00.000Z",
       createdAt: "2026-09-13T00:00:00.000Z",
+      sourceDeletedAt: null,
     }]);
   } finally { await db.close(); }
 });
@@ -68,7 +74,7 @@ test("ordered artwork creates a hashed one-time token and returns only a trusted
     const result = await openFaceJamasArtwork(
       db,
       ref,
-      Date.parse("2026-09-14T00:03:00.000Z"),
+      Date.parse("2026-09-14T00:04:00.000Z"),
       async (_input, init) => {
         const body = JSON.parse(String(init?.body || "{}"));
         submittedToken = body.token;
@@ -82,7 +88,7 @@ test("ordered artwork creates a hashed one-time token and returns only a trusted
       },
     );
     assert.equal(result.orderId, "gid://shopify/Order/12345");
-    assert.equal(result.expiresAt, "2026-09-14T00:08:00.000Z");
+    assert.equal(result.expiresAt, "2026-09-14T00:09:00.000Z");
     const access = await db.database.get("SELECT token_hash, ref, consumed_at FROM facejamas_asset_access WHERE ref = ?", ref);
     assert.equal(access?.ref, ref);
     assert.equal(access?.consumed_at, null);
@@ -91,9 +97,14 @@ test("ordered artwork creates a hashed one-time token and returns only a trusted
   } finally { await db.close(); }
 }));
 
-test("unbound FaceJamas uploads cannot be opened by fulfillment", async () => withEnv(async () => {
-  const db = await fixture(null);
+test("unbound or retention-deleted FaceJamas uploads cannot be opened by fulfillment", async () => withEnv(async () => {
+  const unbound = await fixture(null);
   try {
-    await assert.rejects(() => openFaceJamasArtwork(db, ref, Date.parse("2026-09-14T00:03:00.000Z"), async () => Response.json({})), /only be opened after it is bound/i);
-  } finally { await db.close(); }
+    await assert.rejects(() => openFaceJamasArtwork(unbound, ref, Date.parse("2026-09-14T00:04:00.000Z"), async () => Response.json({})), /only be opened after it is bound/i);
+  } finally { await unbound.close(); }
+
+  const deleted = await fixture("gid://shopify/Order/12345", "2026-12-14T00:03:00.000Z");
+  try {
+    await assert.rejects(() => openFaceJamasArtwork(deleted, ref, Date.parse("2026-12-15T00:00:00.000Z"), async () => Response.json({})), /retention limit/i);
+  } finally { await deleted.close(); }
 }));
