@@ -15,11 +15,7 @@
       }
       const miss=()=>{
         const fallback=el.dataset.fallback;
-        if(fallback && !el.dataset.fallbackTried){
-          el.dataset.fallbackTried='true';
-          el.src=fallback;
-          return;
-        }
+        if(fallback && !el.dataset.fallbackTried){el.dataset.fallbackTried='true';el.src=fallback;return;}
         shell?.classList.add('missing');
       };
       el.addEventListener('error',miss);
@@ -34,14 +30,29 @@
     if(!cart.size){list.innerHTML='<p class="product-copy">Your bag is empty.</p>'}
     for(const item of cart.values()){
       const row=document.createElement('div'); row.className='cart-line';
-      row.innerHTML=`<div><strong>${item.name}</strong><span>${item.quantity} × ${money(item.price)}</span></div><button type="button" aria-label="Remove ${item.name}">Remove</button>`;
+      const personalized=item.personalizationRef?'<span class="cart-personalized">✓ Personalized photo attached</span>':'';
+      row.innerHTML=`<div><strong>${item.name}</strong><span>${item.quantity} × ${money(item.price)}</span>${personalized}</div><button type="button" aria-label="Remove ${item.name}">Remove</button>`;
       row.querySelector('button').onclick=()=>{cart.delete(item.variantId);refreshCart()}; list.append(row);
     }
     $('#cart-total').textContent=money(cartTotal());
   }
+  function personalizationFields(){
+    if(!cfg.personalizationRequired) return {};
+    const fields=window.FaceJamasPersonalization?.cartFields?.();
+    if(!fields){
+      alert('Upload and confirm your photo before adding a FaceJamas product.');
+      document.querySelector('#customize')?.scrollIntoView({behavior:'smooth'});
+      return null;
+    }
+    return fields;
+  }
   function addProduct(button){
     const card=button.closest('[data-product]'); const variantId=card.dataset.variant; const name=card.dataset.name; const price=Number(card.dataset.price); const qty=Math.max(1,Math.min(20,Number($('.qty',card)?.value||1)));
-    const prev=cart.get(variantId); cart.set(variantId,{variantId,name,price,quantity:Math.min(20,(prev?.quantity||0)+qty)}); refreshCart(); openCart();
+    const personal=personalizationFields(); if(personal===null) return;
+    const prev=cart.get(variantId);
+    const samePersonalization=!cfg.personalizationRequired || prev?.personalizationRef===personal.personalizationRef;
+    const quantity=samePersonalization?Math.min(20,(prev?.quantity||0)+qty):qty;
+    cart.set(variantId,{variantId,name,price,quantity,...personal}); refreshCart(); openCart();
   }
   function openCart(){ $('#cart-drawer')?.classList.add('open'); document.body.style.overflow='hidden'; }
   function closeCart(){ $('#cart-drawer')?.classList.remove('open'); document.body.style.overflow=''; }
@@ -49,7 +60,7 @@
     if(!cart.size) return;
     if(cfg.checkoutEnabled===false){ alert(cfg.checkoutDisabledMessage||'Checkout is not available yet.'); return; }
     if(!window.LimitlessCheckout){ alert('Secure checkout is still loading. Please try again.'); return; }
-    const items=[...cart.values()].map(({variantId,quantity})=>({variantId,quantity}));
+    const items=[...cart.values()].map(({variantId,quantity,personalizationRef,personalizationProof})=>({variantId,quantity,...(personalizationRef?{personalizationRef,personalizationProof}:{})}));
     window.LimitlessCheckout.start({brandSlug:cfg.brandSlug,items});
   }
   $$('[data-add]').forEach(b=>b.addEventListener('click',()=>addProduct(b)));
