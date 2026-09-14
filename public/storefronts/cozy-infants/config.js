@@ -1,0 +1,1 @@
+window.STOREFRONT_CONFIG={brandSlug:'cozyinfants',checkoutEnabled:true};
