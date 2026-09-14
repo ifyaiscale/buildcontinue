@@ -1,142 +1,175 @@
-import { createPrivateKey, createPublicKey, randomUUID, sign, verify } from "node:crypto";
-import { z } from "zod";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { Brand } from "../types";
+import type { Store } from "./store";
 import { HttpError } from "./errors";
 
-const MAX_RECEIPT_AGE_MS = 31 * 24 * 60 * 60 * 1000;
-const UPLOAD_TTL_MS = 10 * 60 * 1000;
-const ASSET_ACCESS_TTL_MS = 5 * 60 * 1000;
 export const PERSONALIZATION_REF_PATTERN = /^pers_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const tokenPart = /^[A-Za-z0-9_-]+$/;
+export const PERSONALIZATION_PROOF_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 
-const uploadCapability = z.object({
-  typ: z.literal("facejamas-upload"),
-  brandId: z.string().min(1).max(200),
-  slug: z.literal("facejamas"),
-  origin: z.string().url().max(500),
-  ref: z.string().regex(PERSONALIZATION_REF_PATTERN),
-  jti: z.string().uuid(),
-  iat: z.number().int().nonnegative(),
-  exp: z.number().int().positive(),
-}).strict();
+export type PersonalizationCartFields = {
+  personalizationRef?: string;
+  personalizationProof?: string;
+};
 
-const uploadReceipt = z.object({
-  typ: z.literal("facejamas-receipt"),
-  brandId: z.string().min(1).max(200),
-  slug: z.literal("facejamas"),
-  ref: z.string().regex(PERSONALIZATION_REF_PATTERN),
-  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
-  size: z.number().int().min(1).max(10 * 1024 * 1024),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  iat: z.number().int().nonnegative(),
-  exp: z.number().int().positive(),
-}).strict();
+type Receipt = {
+  ref: string;
+  proofHash: string;
+  expiresAt: string;
+  attemptId?: string;
+  orderId?: string;
+};
 
-const assetCapability = z.object({
-  typ: z.literal("facejamas-asset"),
-  ref: z.string().regex(PERSONALIZATION_REF_PATTERN),
-  jti: z.string().uuid(),
-  iat: z.number().int().nonnegative(),
-  exp: z.number().int().positive(),
-}).strict();
-
-function b64Json(value: unknown) {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-}
-
-function parsePayload(token: string) {
-  const parts = token.split(".");
-  if (parts.length !== 3 || parts.some(part => !part || !tokenPart.test(part))) throw new HttpError(422, "Personalization proof is invalid.");
-  let payload: unknown;
-  try { payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")); }
-  catch { throw new HttpError(422, "Personalization proof is invalid."); }
-  return { parts, payload, signed: Buffer.from(`${parts[0]}.${parts[1]}`, "utf8"), signature: Buffer.from(parts[2], "base64url") };
-}
-
-function privateKey() {
-  const value = process.env.FACEJAMAS_CAPABILITY_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
-  if (!value) throw new HttpError(503, "FaceJamas personalization signing is not configured.");
-  try { return createPrivateKey(value); }
-  catch { throw new HttpError(503, "FaceJamas personalization signing is not configured correctly."); }
-}
-
-function receiptPublicKey() {
-  const value = process.env.FACEJAMAS_RECEIPT_PUBLIC_KEY?.replace(/\\n/g, "\n").trim();
-  if (!value) throw new HttpError(503, "FaceJamas personalization verification is not configured.");
-  try { return createPublicKey(value); }
-  catch { throw new HttpError(503, "FaceJamas personalization verification is not configured correctly."); }
-}
-
-function signPayload(payload: unknown) {
-  const header = b64Json({ alg: "ES256", typ: "JWT" });
-  const body = b64Json(payload);
-  const signed = Buffer.from(`${header}.${body}`, "utf8");
-  const signature = sign("sha256", signed, { key: privateKey(), dsaEncoding: "ieee-p1363" });
-  return `${header}.${body}.${signature.toString("base64url")}`;
-}
-
-function verifyReceiptToken(token: string) {
-  if (!token || token.length > 3000) throw new HttpError(422, "Personalization proof is invalid.");
-  const parsed = parsePayload(token);
-  if (!verify("sha256", parsed.signed, { key: receiptPublicKey(), dsaEncoding: "ieee-p1363" }, parsed.signature)) {
-    throw new HttpError(422, "Personalization proof is invalid.");
+function receiptTable(db: Store) {
+  if (db.database.sqlite) {
+    db.database.sqlite.exec(`CREATE TABLE IF NOT EXISTS facejamas_upload_receipts (
+      ref TEXT PRIMARY KEY,
+      proof_hash TEXT NOT NULL,
+      content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+      size_bytes INTEGER NOT NULL DEFAULT 1,
+      sha256 TEXT NOT NULL DEFAULT '',
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT '',
+      attempt_id TEXT,
+      order_id TEXT,
+      attached_at TEXT
+    )`);
+    return "facejamas_upload_receipts";
   }
-  const receipt = uploadReceipt.safeParse(parsed.payload);
-  if (!receipt.success) throw new HttpError(422, "Personalization proof is invalid.");
-  return receipt.data;
+  return "public.facejamas_upload_receipts";
 }
 
-function configuredUrl(name: "FACEJAMAS_UPLOAD_URL" | "FACEJAMAS_ASSET_URL") {
-  const raw = process.env[name]?.trim();
-  if (!raw) throw new HttpError(503, "FaceJamas private media service is not configured yet.");
-  let url: URL;
-  try { url = new URL(raw); }
-  catch { throw new HttpError(503, "FaceJamas private media service is not configured correctly."); }
-  if (process.env.NODE_ENV === "production" && url.protocol !== "https:") throw new HttpError(503, "FaceJamas private media service must use HTTPS.");
-  return url;
+function proofHash(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export function issueFaceJamasUploadCapability(brand: Brand, origin: string, now = Date.now()) {
-  if (brand.slug !== "facejamas") throw new HttpError(404, "Personalization is not available for this store.");
-  const originUrl = new URL(origin);
-  const ref = `pers_${randomUUID()}`;
-  const payload = uploadCapability.parse({
-    typ: "facejamas-upload",
-    brandId: brand.id,
-    slug: "facejamas",
-    origin: originUrl.origin,
-    ref,
-    jti: randomUUID(),
-    iat: now,
-    exp: now + UPLOAD_TTL_MS,
-  });
+function constantHexEqual(left: string, right: string) {
+  if (!/^[0-9a-f]{64}$/i.test(left) || !/^[0-9a-f]{64}$/i.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function parseReceipt(row: Record<string, unknown> | undefined): Receipt | undefined {
+  if (!row) return undefined;
+  if (typeof row.ref !== "string" || typeof row.proof_hash !== "string" || typeof row.expires_at !== "string") return undefined;
   return {
-    uploadUrl: configuredUrl("FACEJAMAS_UPLOAD_URL").toString(),
-    capability: signPayload(payload),
-    personalizationRef: ref,
-    expiresAt: payload.exp,
+    ref: row.ref,
+    proofHash: row.proof_hash,
+    expiresAt: row.expires_at,
+    ...(typeof row.attempt_id === "string" ? { attemptId: row.attempt_id } : {}),
+    ...(typeof row.order_id === "string" ? { orderId: row.order_id } : {}),
   };
 }
 
-export function verifyFaceJamasPersonalization(brand: Brand, ref: string, proof: string, now = Date.now()) {
-  if (brand.slug !== "facejamas") throw new HttpError(422, "Personalization is only supported for FaceJamas.");
-  if (!PERSONALIZATION_REF_PATTERN.test(ref)) throw new HttpError(422, "FaceJamas personalization reference is invalid.");
-  const receipt = verifyReceiptToken(proof);
-  if (receipt.brandId !== brand.id || receipt.slug !== brand.slug || receipt.ref !== ref) throw new HttpError(422, "This personalization upload does not belong to this store or item.");
-  if (receipt.iat > now + 60_000 || receipt.exp <= now || receipt.exp - receipt.iat > MAX_RECEIPT_AGE_MS) throw new HttpError(410, "This personalization upload expired. Upload the photo again.");
-  return receipt;
+async function receipt(db: Store, ref: string) {
+  const row = await db.database.get(
+    `SELECT ref, proof_hash, expires_at, attempt_id, order_id FROM ${receiptTable(db)} WHERE ref = ?`,
+    ref,
+  );
+  return parseReceipt(row);
 }
 
-export function issueFaceJamasAssetAccess(ref: string, now = Date.now()) {
-  if (!PERSONALIZATION_REF_PATTERN.test(ref)) throw new HttpError(422, "FaceJamas personalization reference is invalid.");
-  const payload = assetCapability.parse({
-    typ: "facejamas-asset",
-    ref,
-    jti: randomUUID(),
-    iat: now,
-    exp: now + ASSET_ACCESS_TTL_MS,
+export async function verifyFaceJamasCartPersonalizations(
+  db: Store,
+  brand: Brand,
+  items: PersonalizationCartFields[],
+  now = Date.now(),
+) {
+  const hasPersonalization = items.some(item => item.personalizationRef || item.personalizationProof);
+  if (brand.slug !== "facejamas") {
+    if (hasPersonalization) throw new HttpError(422, "Personalization references are only supported for FaceJamas.");
+    return;
+  }
+
+  if (items.some(item => !item.personalizationRef || !item.personalizationProof)) {
+    throw new HttpError(422, "Upload and confirm a photo for every FaceJamas item before checkout.");
+  }
+
+  const checked = new Map<string, string>();
+  for (const item of items) {
+    const ref = item.personalizationRef!;
+    const proof = item.personalizationProof!;
+    if (!PERSONALIZATION_REF_PATTERN.test(ref) || !PERSONALIZATION_PROOF_PATTERN.test(proof)) {
+      throw new HttpError(422, "A FaceJamas photo upload proof is invalid. Upload the photo again.");
+    }
+    const previous = checked.get(ref);
+    if (previous && previous !== proof) throw new HttpError(422, "A FaceJamas photo reference has conflicting proofs.");
+    if (previous) continue;
+
+    const stored = await receipt(db, ref);
+    if (!stored || !constantHexEqual(stored.proofHash, proofHash(proof))) {
+      throw new HttpError(422, "A FaceJamas photo upload could not be verified. Upload the photo again.");
+    }
+    if (Date.parse(stored.expiresAt) <= now || stored.orderId || stored.attemptId) {
+      throw new HttpError(409, "That FaceJamas photo upload was already used or expired. Upload the photo again for this order.");
+    }
+    checked.set(ref, proof);
+  }
+}
+
+export function personalizationRefs(items: Array<{ personalizationRef?: string }>) {
+  return [...new Set(items.map(item => item.personalizationRef).filter((value): value is string => Boolean(value)))];
+}
+
+export function personalizationRefsFromDraftInput(lineItems: Array<Record<string, unknown>>) {
+  const refs: string[] = [];
+  for (const line of lineItems) {
+    const attributes = line.customAttributes;
+    if (!Array.isArray(attributes)) continue;
+    for (const attribute of attributes) {
+      if (!attribute || typeof attribute !== "object") continue;
+      const item = attribute as Record<string, unknown>;
+      if (item.key === "Personalization ID" && typeof item.value === "string" && PERSONALIZATION_REF_PATTERN.test(item.value)) refs.push(item.value);
+    }
+  }
+  return [...new Set(refs)];
+}
+
+export async function claimFaceJamasPersonalizations(
+  db: Store,
+  brandId: string,
+  refs: string[],
+  attemptId: string,
+  now = Date.now(),
+) {
+  if (!refs.length) return;
+  await db.transaction(async () => {
+    const table = receiptTable(db);
+    for (const ref of new Set(refs)) {
+      const stored = await receipt(db, ref);
+      if (!stored || Date.parse(stored.expiresAt) <= now || stored.orderId) {
+        throw new HttpError(409, "A FaceJamas personalization is no longer available. Start checkout again with a new photo upload.");
+      }
+      if (stored.attemptId && stored.attemptId !== attemptId) {
+        throw new HttpError(409, "A FaceJamas personalization is already bound to another checkout. Upload the photo again for a new order.");
+      }
+      await db.database.run(
+        `UPDATE ${table} SET attempt_id = ?, attached_at = COALESCE(attached_at, ?) WHERE ref = ? AND (attempt_id IS NULL OR attempt_id = ?)`,
+        attemptId,
+        new Date(now).toISOString(),
+        ref,
+        attemptId,
+      );
+      const verified = await receipt(db, ref);
+      if (verified?.attemptId !== attemptId) throw new HttpError(409, "FaceJamas personalization could not be reserved for this checkout.");
+    }
   });
-  const target = configuredUrl("FACEJAMAS_ASSET_URL");
-  target.searchParams.set("token", signPayload(payload));
-  return { url: target.toString(), expiresAt: payload.exp, personalizationRef: ref };
+}
+
+export async function finalizeFaceJamasPersonalizations(
+  db: Store,
+  refs: string[],
+  attemptId: string,
+  orderId: string,
+) {
+  if (!refs.length) return;
+  await db.transaction(async () => {
+    const table = receiptTable(db);
+    for (const ref of new Set(refs)) {
+      const stored = await receipt(db, ref);
+      if (!stored || stored.attemptId !== attemptId) throw new HttpError(409, "FaceJamas personalization binding needs reconciliation before fulfillment.");
+      if (stored.orderId && stored.orderId !== orderId) throw new HttpError(409, "FaceJamas personalization is already bound to a different Shopify order.");
+      await db.database.run(`UPDATE ${table} SET order_id = ? WHERE ref = ? AND attempt_id = ?`, orderId, ref, attemptId);
+      const verified = await receipt(db, ref);
+      if (verified?.orderId !== orderId) throw new HttpError(409, "FaceJamas personalization could not be bound to the Shopify order.");
+    }
+  });
 }
