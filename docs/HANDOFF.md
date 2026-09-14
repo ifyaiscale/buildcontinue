@@ -78,7 +78,7 @@ The prepared Shopify themes contain per-brand cart drawers and checkout bridges 
 
 - Netlify HTTPS certificate was renewed to cover `checkout.chefings.com`, `checkout.cozyinfants.com`, and `checkout.facejamas.com`.
 - Production `CHECKOUT_ORIGINS` was reset to the exact three HTTPS origins mapped to `chefings`, `cozyinfants`, and `facejamas`.
-- This handoff update intentionally triggers a fresh production deploy so the Next.js runtime receives the corrected host mapping.
+- After the first production rebuild still returned `Site not configured` on Chefings, `CHECKOUT_ORIGINS` was explicitly upserted for **all Netlify contexts** with `builds`, `functions`, and `runtime` scopes, then another production rebuild was triggered.
 - Public payment remains disabled during this no-charge checkout QA.
 
 ## Definition of done
