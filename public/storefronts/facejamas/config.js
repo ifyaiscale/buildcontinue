@@ -1,0 +1,1 @@
+window.STOREFRONT_CONFIG={brandSlug:'facejamas',checkoutEnabled:false,checkoutDisabledMessage:'FaceJamas checkout stays locked until the private personalization upload is connected to fulfillment.'};
