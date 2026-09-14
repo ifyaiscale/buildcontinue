@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { CheckoutPage } from "@/components/checkout";
 import { CartCheckoutError, CartCheckoutPage } from "@/components/cart-checkout";
 import { PaymentReturnPage } from "@/components/payment-return";
@@ -5,6 +6,22 @@ import { publicCartBrand, readCartSession } from "@/lib/server/cart-session";
 import { pageSite } from "@/lib/server/page-site";
 import { store } from "@/lib/server/store";
 import "../../checkout.css";
+import "../white-label.css";
+
+const checkoutTitles: Record<string, string> = {
+  chefings: "CHEFINGS · Secure checkout",
+  cozyinfants: "Cozy Infants · Secure checkout",
+  facejamas: "FaceJamas · Secure checkout",
+};
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  return {
+    title: checkoutTitles[slug] || "Secure checkout",
+    description: "Secure checkout.",
+    robots: { index: false, follow: false },
+  };
+}
 
 export default async function PublicCheckoutPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ cart?: string | string[]; receipt?: string | string[] }> }) {
   const { slug } = await params;
