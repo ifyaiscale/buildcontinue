@@ -25,6 +25,7 @@ async function main() {
         await client.query(await readFile(new URL("../migrations/004_facejamas_edge_bridge.sql", import.meta.url), "utf8"));
         await client.query(await readFile(new URL("../migrations/005_checkout_fk_indexes.sql", import.meta.url), "utf8"));
         await client.query(await readFile(new URL("../migrations/006_remove_legacy_personalization_schema.sql", import.meta.url), "utf8"));
+        await client.query(await readFile(new URL("../migrations/007_facejamas_ordered_artwork_retention.sql", import.meta.url), "utf8"));
         console.log("Private database schema initialized. No sample or existing records were imported.");
       } catch (error) {
         try { await client.query("ROLLBACK"); } catch { failed = true; }
