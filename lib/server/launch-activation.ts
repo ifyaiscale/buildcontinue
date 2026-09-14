@@ -142,7 +142,7 @@ export async function recordLaunchAcceptance(db: Store, brandId: string, attempt
       orderId: attempt.orderId,
       totalCents: attempt.totalCents,
       shopifyDomain: attempt.shopifyDomain,
-      whopCompanyId: attempt.whop.account,
+      whopCompanyId: attempt.whopCompanyId,
       launchFingerprint: launchFingerprint(brand),
       acceptedAt: new Date().toISOString(),
     };
