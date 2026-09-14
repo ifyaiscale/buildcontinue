@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Brand } from "../types";
+import { PERSONALIZATION_PROOF_PATTERN, PERSONALIZATION_REF_PATTERN } from "./personalization";
 import { decrypt, encrypt, HttpError } from "./security";
 
 const CART_TTL_MS = 30 * 60 * 1000;
@@ -9,6 +10,8 @@ export const storefrontCartInput = z.object({
   items: z.array(z.object({
     variantId: z.string().trim().min(1).max(200),
     quantity: z.number().int().min(1).max(20),
+    personalizationRef: z.string().regex(PERSONALIZATION_REF_PATTERN).optional(),
+    personalizationProof: z.string().regex(PERSONALIZATION_PROOF_PATTERN).optional(),
   }).strict()).min(1).max(30),
 }).strict();
 
@@ -16,7 +19,11 @@ const cartPayload = z.object({
   version: z.literal(1),
   brandId: z.string().min(1).max(200),
   slug: z.string().min(1).max(200),
-  items: z.array(z.object({ productId: z.string().min(1).max(200), quantity: z.number().int().min(1).max(20) }).strict()).min(1).max(30),
+  items: z.array(z.object({
+    productId: z.string().min(1).max(200),
+    quantity: z.number().int().min(1).max(20),
+    personalizationRef: z.string().regex(PERSONALIZATION_REF_PATTERN).optional(),
+  }).strict()).min(1).max(30),
   issuedAt: z.number().int().nonnegative(),
   expiresAt: z.number().int().positive(),
 }).strict();
@@ -49,7 +56,18 @@ export function createCartSession(brand: Brand, input: unknown, now = Date.now()
     const productId = resolveProductId(brand, item.variantId);
     if (seen.has(productId)) throw new HttpError(422, "The same Shopify variant cannot appear twice in one cart handoff.");
     seen.add(productId);
-    return { productId, quantity: item.quantity };
+
+    if (brand.slug === "facejamas") {
+      if (!item.personalizationRef || !item.personalizationProof) throw new HttpError(422, "Upload and confirm a photo for every FaceJamas item before checkout.");
+    } else if (item.personalizationRef || item.personalizationProof) {
+      throw new HttpError(422, "Personalization references are only supported for FaceJamas.");
+    }
+
+    return {
+      productId,
+      quantity: item.quantity,
+      ...(item.personalizationRef ? { personalizationRef: item.personalizationRef } : {}),
+    };
   });
   const payload: CartSession = { version: 1, brandId: brand.id, slug: brand.slug, items, issuedAt: now, expiresAt: now + CART_TTL_MS };
   return { token: encrypt(JSON.stringify(payload), `storefront-cart:${brand.id}:v1`), items, expiresAt: payload.expiresAt };
@@ -66,6 +84,8 @@ export function readCartSession(brand: Brand, token: string, now = Date.now()): 
   for (const item of parsed.data.items) {
     const product = brand.products.find(candidate => candidate.id === item.productId);
     if (!product || !product.available) throw new HttpError(409, "A cart item changed or became unavailable. Return to the store and update your cart.");
+    if (brand.slug === "facejamas" && !item.personalizationRef) throw new HttpError(409, "A FaceJamas cart item is missing its personalization reference. Return to the store and upload the photo again.");
+    if (brand.slug !== "facejamas" && item.personalizationRef) throw new HttpError(422, "This cart contains unsupported personalization data.");
   }
   return parsed.data;
 }
