@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 const PROVIDER_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-provider-admin";
 const WHOP_PROVIDER_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-admin";
+const SHOPIFY_PROVIDER_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-shopify-admin";
 
 function sessionToken(request: Request) {
   const cookies = request.headers.get("cookie") || "";
@@ -27,8 +28,13 @@ export const POST = route(async (request: Request) => {
   const token = sessionToken(request);
   if (!token) return json({ error: "Sign in to manage your workspace." }, 401);
   const connection = await body(request) as Record<string, unknown>;
+
   const useManualWhop = connection?.provider === "whop" && typeof connection.webhookSecret === "string" && connection.webhookSecret.trim().length > 0;
-  const target = useManualWhop ? WHOP_PROVIDER_URL : PROVIDER_URL;
+  const target = connection?.provider === "shopify"
+    ? SHOPIFY_PROVIDER_URL
+    : useManualWhop
+      ? WHOP_PROVIDER_URL
+      : PROVIDER_URL;
 
   let response: Response;
   try {
