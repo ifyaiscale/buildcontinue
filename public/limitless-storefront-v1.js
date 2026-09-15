@@ -24,20 +24,31 @@
     if (!Array.isArray(items) || items.length < 1 || items.length > 30) {
       error("cart must contain between 1 and 30 lines");
     }
-    var seen = Object.create(null);
+
+    var seenVariants = Object.create(null);
+    var seenPersonalizations = Object.create(null);
+
     return items.map(function (item) {
       if (!item || typeof item !== "object" || Array.isArray(item)) error("cart lines must be objects");
       var variant = canonicalVariant(item.variantId != null ? item.variantId : item.shopifyVariantId);
       var quantity = Number(item.quantity);
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) error("quantity must be a whole number from 1 to 20");
-      if (seen[variant.key]) error("the same Shopify variant cannot appear twice");
-      seen[variant.key] = true;
 
       var ref = item.personalizationRef == null ? "" : String(item.personalizationRef).trim();
       var proof = item.personalizationProof == null ? "" : String(item.personalizationProof).trim();
       if ((ref && !proof) || (!ref && proof)) error("personalization reference and proof must be provided together");
       if (ref && !PERSONALIZATION_REF.test(ref)) error("personalization reference is invalid");
       if (proof && !PERSONALIZATION_PROOF.test(proof)) error("personalization proof is invalid");
+      if (ref && seenPersonalizations[ref]) error("the same personalization reference cannot appear twice");
+
+      var prior = seenVariants[variant.key];
+      if (prior) {
+        var personalizedDuplicate = prior.personalized && ref && prior.quantity === 1 && quantity === 1;
+        if (!personalizedDuplicate) error("the same Shopify variant cannot appear twice unless each line has its own personalization");
+      }
+
+      if (ref) seenPersonalizations[ref] = true;
+      if (!prior) seenVariants[variant.key] = { personalized: !!ref, quantity: quantity };
 
       return {
         variantId: variant.value,
@@ -82,7 +93,7 @@
   }
 
   global.LimitlessCheckout = Object.freeze({
-    version: "1.1.0",
+    version: "1.2.0",
     normalizeItems: normalizeItems,
     payload: payload,
     start: start
