@@ -77,7 +77,13 @@ export async function issueAdminSession(password: string) {
   return result.token;
 }
 
-export function sessionCookie(token: string | null) {
+// Compatibility only: the production login route uses issueAdminSession().
+export function verifyPassword(_password: string) {
+  return false;
+}
+
+export function sessionCookie(tokenOrLogout: string | boolean | null = null) {
+  const token = typeof tokenOrLogout === "string" ? tokenOrLogout : null;
   const value = token ?? "";
   const secure = process.env.NODE_ENV === "production" || process.env.APP_URL?.startsWith("https:");
   return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token ? SESSION_SECONDS : 0}${secure ? "; Secure" : ""}`;
