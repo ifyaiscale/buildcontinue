@@ -13,6 +13,7 @@ export const storefrontCartInput = z.object({
     personalizationRef: z.string().regex(PERSONALIZATION_REF_PATTERN).optional(),
     personalizationProof: z.string().regex(PERSONALIZATION_PROOF_PATTERN).optional(),
   }).strict()).min(1).max(30),
+  logoUrl: z.string().trim().min(1).max(1000).optional(),
 }).strict();
 
 const cartPayload = z.object({
@@ -24,6 +25,7 @@ const cartPayload = z.object({
     quantity: z.number().int().min(1).max(20),
     personalizationRef: z.string().regex(PERSONALIZATION_REF_PATTERN).optional(),
   }).strict()).min(1).max(30),
+  logoUrl: z.string().max(1000).optional(),
   issuedAt: z.number().int().nonnegative(),
   expiresAt: z.number().int().positive(),
 }).strict();
@@ -36,6 +38,18 @@ function variantKey(value: string) {
   if (gid) return `shopify:${gid[1]}`;
   if (/^\d+$/.test(trimmed)) return `shopify:${trimmed}`;
   return `id:${trimmed}`;
+}
+
+function safeLogoUrl(raw: string | undefined) {
+  if (!raw) return undefined;
+  let url: URL;
+  try { url = new URL(raw); }
+  catch { throw new HttpError(422, "Store branding could not be verified. Return to the store and try checkout again."); }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "cdn.shopify.com") {
+    throw new HttpError(422, "Store branding could not be verified. Return to the store and try checkout again.");
+  }
+  url.hash = "";
+  return url.toString();
 }
 
 function resolveProductId(brand: Brand, requestedVariantId: string) {
@@ -69,8 +83,17 @@ export function createCartSession(brand: Brand, input: unknown, now = Date.now()
       ...(item.personalizationRef ? { personalizationRef: item.personalizationRef } : {}),
     };
   });
-  const payload: CartSession = { version: 1, brandId: brand.id, slug: brand.slug, items, issuedAt: now, expiresAt: now + CART_TTL_MS };
-  return { token: encrypt(JSON.stringify(payload), `storefront-cart:${brand.id}:v1`), items, expiresAt: payload.expiresAt };
+  const logoUrl = safeLogoUrl(parsed.logoUrl);
+  const payload: CartSession = {
+    version: 1,
+    brandId: brand.id,
+    slug: brand.slug,
+    items,
+    ...(logoUrl ? { logoUrl } : {}),
+    issuedAt: now,
+    expiresAt: now + CART_TTL_MS,
+  };
+  return { token: encrypt(JSON.stringify(payload), `storefront-cart:${brand.id}:v1`), items, logoUrl, expiresAt: payload.expiresAt };
 }
 
 export function readCartSession(brand: Brand, token: string, now = Date.now()): CartSession {
@@ -81,6 +104,7 @@ export function readCartSession(brand: Brand, token: string, now = Date.now()): 
   const parsed = cartPayload.safeParse(decoded);
   if (!parsed.success || parsed.data.brandId !== brand.id || parsed.data.slug !== brand.slug) throw new HttpError(422, "This cart link does not belong to this store.");
   if (parsed.data.expiresAt <= now || parsed.data.issuedAt > now + 60_000 || parsed.data.expiresAt - parsed.data.issuedAt > CART_TTL_MS) throw new HttpError(410, "This cart link has expired. Return to the store and start checkout again.");
+  if (parsed.data.logoUrl) safeLogoUrl(parsed.data.logoUrl);
   for (const item of parsed.data.items) {
     const product = brand.products.find(candidate => candidate.id === item.productId);
     if (!product || !product.available) throw new HttpError(409, "A cart item changed or became unavailable. Return to the store and update your cart.");
