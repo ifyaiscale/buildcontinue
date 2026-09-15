@@ -5,6 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PROVIDER_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-provider-admin";
+const WHOP_PROVIDER_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-admin";
 
 function sessionToken(request: Request) {
   const cookies = request.headers.get("cookie") || "";
@@ -25,11 +26,13 @@ export const POST = route(async (request: Request) => {
   if (!match) return json({ error: "Brand not found." }, 404);
   const token = sessionToken(request);
   if (!token) return json({ error: "Sign in to manage your workspace." }, 401);
-  const connection = await body(request);
+  const connection = await body(request) as Record<string, unknown>;
+  const useManualWhop = connection?.provider === "whop" && typeof connection.webhookSecret === "string" && connection.webhookSecret.trim().length > 0;
+  const target = useManualWhop ? WHOP_PROVIDER_URL : PROVIDER_URL;
 
   let response: Response;
   try {
-    response = await fetch(PROVIDER_URL, {
+    response = await fetch(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "connect", token, brandId: match[1], connection }),
