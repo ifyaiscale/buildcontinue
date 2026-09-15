@@ -91,7 +91,7 @@ function checkoutRequest(form: HTMLFormElement, cartToken: string, priority: boo
   };
 }
 
-export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Brand; initialItems: HandoffCartItem[]; cartToken: string }) {
+export function CartCheckoutPage({ brand, initialItems, cartToken, logoUrl }: { brand: Brand; initialItems: HandoffCartItem[]; cartToken: string; logoUrl?: string }) {
   const experience = checkoutExperience(brand);
   const [priority, setPriority] = useState(false);
   const [quoting, setQuoting] = useState(false);
@@ -215,7 +215,7 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
   return <main className="checkout-page" style={brandStyle(brand)}>
     <Script id="whop-checkout-loader" src="https://js.whop.com/static/checkout/loader.js" strategy="afterInteractive" />
     {brand.announcement && <div className="co-announcement">{brand.announcement}</div>}
-    <header className="co-header"><div className="co-brand"><span className="co-brand-mark">{brand.logoInitial}</span><span>{brand.name}</span></div><span className="co-header-label"><LockKeyhole size={16} /> Secure checkout</span></header>
+    <header className="co-header"><div className="co-brand">{logoUrl ? <img src={logoUrl} alt={brand.name} style={{ display: "block", maxWidth: 176, maxHeight: 50, width: "auto", height: "auto", objectFit: "contain" }} /> : <><span className="co-brand-mark">{brand.logoInitial}</span><span>{brand.name}</span></>}</div><span className="co-header-label"><LockKeyhole size={16} /> Secure checkout</span></header>
     <div className="co-layout">
       <section className="co-details"><nav aria-label="Checkout steps" className="co-breadcrumb"><span aria-current="step">Contact</span><span>›</span> Delivery <span>›</span> Payment</nav><h1>{brand.checkoutTitle || "Secure checkout"}</h1><p className="co-intro">Enter your delivery details and your exact shipping, tax and order total will update automatically.</p>
         <form ref={formRef} onSubmit={event => event.preventDefault()} onChange={invalidateQuote} className="co-form">
@@ -224,6 +224,7 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
           <fieldset><legend>Shipping method</legend><div className="co-delivery"><Truck size={18} /><div><strong>Free standard shipping</strong><span>{experience.deliveryText}</span></div><strong>Free</strong></div>{experience.priorityEnabled && <label className="co-option"><input type="checkbox" checked={priority} onChange={event => { setPriority(event.target.checked); invalidateQuote(); }} /><span><strong>{experience.priorityLabel}</strong><small>Optional · once per order</small></span><strong>+{money(experience.priorityPrice)}</strong></label>}</fieldset>
           {quoting && <div className="co-payment-panel"><div className="co-payment-heading"><span>Updating exact total…</span></div></div>}
           {quote && !quoting && <div className="co-payment-panel"><div className="co-payment-heading"><span><CheckCircle2 size={18} /> Total confirmed</span></div></div>}
+          {quote && !quoting && !quote.paymentEnabled && <div className="co-payment-panel"><div className="co-payment-heading"><span><LockKeyhole size={18} /> Secure payment</span><div className="co-payment-marks"><span className="co-visa">VISA</span><span className="co-mastercard"><i></i><i></i></span><span className="co-amex">AMEX</span></div></div><div className="co-card-preview"><div><LockKeyhole size={15} /> Embedded card & wallet checkout is ready</div><div className="co-card-placeholder"><span>•••• •••• •••• ••••</span><span>MM / YY · CVC</span></div><p>Live payment fields are intentionally locked during no-charge launch QA. When live payments are enabled, Whop’s secure embedded card and wallet fields load here automatically without sending the customer away from {brand.name}.</p></div></div>}
           {preparingPayment && <div className="co-payment-panel"><div className="co-payment-heading"><span><LockKeyhole size={18} /> Preparing secure payment…</span></div></div>}
           {error && <div className="co-error" role="alert">{error}</div>}
           {paymentSession && quotedRequest && shipping && <div className="co-payment-panel"><div className="co-payment-heading"><span><LockKeyhole size={18} /> Payment</span></div><div

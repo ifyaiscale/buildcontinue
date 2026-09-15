@@ -47,7 +47,7 @@ export default async function PublicCheckoutPage({ params, searchParams }: { par
     const brand = await db.brand(slug, true);
     domain = brand.domain;
     const session = readCartSession(brand, token);
-    return <CartCheckoutPage brand={publicCartBrand(brand)} initialItems={session.items} cartToken={token} />;
+    return <CartCheckoutPage brand={publicCartBrand(brand)} initialItems={session.items} cartToken={token} logoUrl={session.logoUrl} />;
   } catch {
     return <CartCheckoutError domain={domain} />;
   }
