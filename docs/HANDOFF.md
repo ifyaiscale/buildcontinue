@@ -5,143 +5,159 @@ Last updated: 2026-09-15.
 ## Safety state
 
 - Production branch: `hoplite/beroia-65b17429`.
-- Customer charging remains OFF.
-- `PUBLIC_PAYMENT_ENABLED=false` must remain in production until controlled acceptance succeeds and the owner explicitly authorizes public payments.
-- Do not run a real charge merely because webhook transport now works.
+- Customer charging remains **OFF**.
+- Supabase checkout runtime gates are still disabled for public charging.
+- Do not perform a real charge until the owner explicitly authorizes the controlled acceptance purchase immediately before it happens.
+- Do not enable public payments merely because providers, webhooks or checkout UI are connected.
 
-## 2026-09-15 recovery architecture
+## Provider recovery — COMPLETE FOR ALL THREE BRANDS
 
-Fresh Netlify deploys no longer had reliable access to the original sensitive runtime values used by the legacy backend (`DATABASE_URL`, admin/session secrets, and the original provider credential-encryption key). The original `limitless.credentials` ciphertext therefore remains unreadable on fresh deployments.
-
-Sensitive admin/provider operations have been moved toward Supabase instead of depending on Netlify secret persistence.
-
-### Admin auth/state
-
-- Workspace login: Supabase Edge Function `limitless-admin-auth-v2`.
-- Workspace state: Supabase Edge Function `limitless-admin-state`.
-- Netlify routes bridge login/logout/state to those services.
-- Login and workspace loading are verified working.
-- Do not restore the old Netlify admin/session-secret dependency.
-
-### Provider credential vault v2
-
-Private tables:
-
-- `public.limitless_provider_crypto_material`
-- `public.limitless_provider_credentials_v2`
-
-New provider credentials are encrypted with AES-256-GCM before storage. The key stays server-side. Provider secrets must never be committed to GitHub or returned to the browser after saving.
-
-The legacy provider ciphertext remains separate and unreadable without the lost original key. Each provider therefore needs a one-time controlled re-entry into the v2 vault.
-
-## Whop recovery — ALL THREE BRANDS COMPLETE
-
-All three brand Whop credentials have now been re-verified and securely stored in the Supabase v2 provider vault. Each brand has a dedicated manually-created Whop webhook for `payment.succeeded`, and each webhook has passed a signed Whop dashboard test with HTTP 200.
+All six live provider credentials are securely stored in `public.limitless_provider_credentials_v2` using the server-side AES-256-GCM provider key.
 
 ### CHEFINGS
 
-- Brand ID: `brand_570bb818-40e1-43c5-b34e-9c8bfbf82f9e`
-- Company ID: `biz_oSecL7MrGnjRmk`
-- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
-- Webhook endpoint:
-  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_570bb818-40e1-43c5-b34e-9c8bfbf82f9e`
-- Signed dashboard `payment.succeeded` test returned HTTP 200.
-- Supabase confirms one persisted Chefings webhook event (`sequence=2`).
+- Brand: `brand_570bb818-40e1-43c5-b34e-9c8bfbf82f9e`
+- Shopify: `5ctqsk-tn.myshopify.com` — recovered/verified.
+- Whop: `biz_oSecL7MrGnjRmk` — recovered/verified.
 
 ### COZYINFANTS
 
-- Brand ID: `brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
-- Company ID: `biz_ZfAubYoFlaajTC`
-- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
-- Webhook endpoint:
-  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
-- Signed dashboard `payment.succeeded` test returned HTTP 200.
-- Supabase confirms one persisted Cozy webhook event (`sequence=1`).
+- Brand: `brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
+- Shopify: `1b1zsq-0y.myshopify.com` — recovered/verified.
+- Whop: `biz_ZfAubYoFlaajTC` — recovered/verified.
 
 ### FACEJAMAS
 
-- Brand ID: `brand_dd7799da-caef-4abc-8ee0-1a161e59a2c6`
-- Company ID: `biz_MW3bKLHdo3ItcR`
-- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
-- Webhook endpoint:
-  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_dd7799da-caef-4abc-8ee0-1a161e59a2c6`
-- Signed dashboard `payment.succeeded` test returned HTTP 200.
-- Supabase confirms one persisted FaceJamas webhook event (`sequence=3`).
+- Brand: `brand_dd7799da-caef-4abc-8ee0-1a161e59a2c6`
+- Shopify: `f0m103-zz.myshopify.com` — recovered/verified.
+- Whop: `biz_MW3bKLHdo3ItcR` — recovered/verified.
 
-No Whop API keys or signing secrets are stored in Git or this handoff.
+Brand metadata has been normalized so all six provider references report `status=verified` and match the encrypted v2 credentials.
 
-### Whop connection service
+No Shopify client secret/access token, Whop API key, webhook secret or provider AES key belongs in Git or browser responses.
 
-`limitless-whop-admin` v4 is the active Whop recovery service.
+## Admin recovery architecture
 
-It validates the brand/company, verifies the Whop API key, encrypts the API key + webhook signing secret with AES-256-GCM, and upserts the encrypted v2 vault row. It deliberately bypasses the older connection-commit activity write because `limitless.activity.sequence` is `GENERATED ALWAYS AS IDENTITY` and the older RPC can fail with PostgreSQL `428C9` by manually writing that column.
+Fresh Netlify deploys lost reliable access to the original Netlify runtime secrets (`DATABASE_URL`, old admin/session secrets and old provider encryption key). The legacy `limitless.credentials` ciphertext is therefore not a valid runtime dependency.
 
-### Whop receiver — verified transport
+Current admin path:
 
-Supabase Edge Function `limitless-whop-webhook` is ACTIVE at version 4.
+- authentication: Supabase Edge Function `limitless-admin-auth-v2`;
+- state read: Supabase Edge Function `limitless-admin-state`;
+- provider recovery: `limitless-shopify-admin` / `limitless-whop-admin`;
+- launch administration: `limitless-launch-admin` (being wired through the Next.js Launch Center routes).
 
-Current receiver behavior:
+Do not restore the old Netlify-secret dependency.
 
-- Reads encrypted Whop credentials from the v2 vault.
-- Imports the vault AES key as raw 32-byte AES-256 material.
-- Verifies the raw request body using `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
-- Uses the Whop `ws_...` / `whsec_...` signing secret exactly as stored as UTF-8 HMAC key material; only the `v1,<signature>` header payload is base64-decoded.
-- Enforces a five-minute replay window.
-- Requires `api_version=v1` and `type=payment.succeeded`.
-- Records webhook message IDs idempotently in `limitless.webhook_events`.
-- Synthetic Whop dashboard test events are accepted only as synthetic transport tests and are never treated as payable orders.
-- A real Limitless event with a `limitless_attempt_id` remains subject to brand/account and payment verification before any order completion.
+## Checkout runtime v3 — MIGRATED BACKEND
 
-The webhook event recorder was corrected so Postgres generates `limitless.webhook_events.sequence` itself. The previous implementation manually wrote an `IDENTITY ALWAYS` column and would have failed with PostgreSQL `428C9`.
+Supabase migration `20260915191615_checkout_runtime_v3` installs transaction-locked checkout/payment primitives around the existing private Limitless tables.
 
-All three Whop dashboard tests returned HTTP 200 and persisted successfully. This proves signed webhook transport and persistence. It does NOT prove the real payment reconciliation path.
+Active Supabase services:
 
-## Shopify recovery
+- `limitless-checkout-runtime` — public cart/view/quote/status runtime; payment start remains gated.
+- `limitless-payment-reconciler` — internal service-role-only Whop verification and Shopify completion.
+- `limitless-whop-webhook` v5 — signed webhook receiver that invokes the reconciler for real Limitless payments.
+- `limitless-launch-admin` — admin policy/readiness/acceptance service.
+- `limitless-acceptance-checkout` — separate controlled-acceptance service; not a public-payment bypass.
 
-### CHEFINGS — COMPLETE
+The Next.js customer cart/start, checkout rendering and quote/status routes have been moved to the Supabase runtime rather than the lost legacy Netlify DB/encryption path.
 
-- Store domain: `5ctqsk-tn.myshopify.com`.
-- Existing Dev Dashboard app: `Limitless - CHEFINGS`.
-- App has the required current scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
-- Connection method: Dev Dashboard app / client credentials grant with automatic short-lived token renewal.
-- User completed verification successfully through the Limitless dashboard.
-- Supabase confirms exactly one encrypted `shopify` credential row for Chefings in `public.limitless_provider_credentials_v2`.
-- Brand metadata has been backfilled safely without using the broken activity-sequence path and now reports Shopify `status=verified`, account `5ctqsk-tn.myshopify.com`.
-- No Shopify client secret or access token is stored in Git or this handoff.
+Verified Netlify production deployment for the first customer-route migration:
 
-### COZYINFANTS — STILL TO RECOVER
+- deploy `6aa99c71f5a84e00086a097c`
+- state `ready`
+- Next.js plugin/build success
+- secret scan: zero matches
+- branch `hoplite/beroia-65b17429`
 
-- Store domain: `1b1zsq-0y.myshopify.com`.
-- Use the corresponding Dev Dashboard app if present and select `Dev Dashboard app (automatic token renewal)` in Limitless.
-- Required minimum scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
+Later commits may trigger newer deploys; verify the latest deploy before acceptance testing.
 
-### FACEJAMAS — STILL TO RECOVER
+## Payment and reconciliation behavior
 
-- Store domain: `f0m103-zz.myshopify.com`.
-- Use the corresponding Dev Dashboard app if present and select `Dev Dashboard app (automatic token renewal)` in Limitless.
-- Required minimum scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
+The v3 payment design preserves the existing safety invariants:
 
-Do not describe these stores as historically unconnected. The recovery issue concerns provider secret material on the fresh runtime.
+1. Shopify calculates authoritative product availability, free standard shipping, destination tax and exact USD total.
+2. A transaction-locked Limitless payment attempt is created with an idempotency key.
+3. Shopify creates one reserved draft order tagged with the Limitless attempt ID.
+4. Whop creates one one-time checkout configuration for the exact cents and carries `limitless_attempt_id` metadata.
+5. Whop card/wallet fields remain embedded in the branded checkout; raw card/CVV data never passes through Limitless.
+6. `payment.succeeded` must have a valid Whop signature and correct brand account.
+7. The internal reconciler independently retrieves the Whop payment and verifies company, amount, currency, checkout configuration and Limitless attempt metadata.
+8. Exactly one Shopify draft is completed into the paid order under a completion lease/idempotency guard.
+9. Duplicate/retried webhooks must not create another Shopify order.
+10. Customer confirmation is based on the persisted payment-attempt state, not merely on a browser redirect.
 
-## Payment backend status — NOT acceptance-ready yet
+Public customer charging is still disabled until controlled acceptance passes.
 
-Signed Whop webhook transport is now working for all three brands, but the full post-payment reconciliation path has not yet been migrated off all legacy Netlify credential/database dependencies.
+## Whop webhook state
 
-Before any controlled real charge, the Supabase-backed path must safely:
+All three dedicated Whop `payment.succeeded` endpoints previously passed signed dashboard synthetic tests. Synthetic events prove signature transport only and are never payable.
 
-1. identify the Limitless payment attempt,
-2. fetch/verify the Whop payment against the correct company, amount, currency, checkout configuration, and attempt metadata,
-3. transition the attempt exactly once,
-4. create/complete exactly one Shopify order,
-5. preserve retry/idempotency protections,
-6. bind FaceJamas personalization where applicable,
-7. expose confirmation only after successful reconciliation.
+The receiver is now `limitless-whop-webhook` v5. A real event with both payment ID and `limitless_attempt_id` is passed to the internal reconciler; a synthetic dashboard event remains non-payable.
 
-Public payments remain OFF throughout this work.
+## FaceJamas personalization / fulfillment architecture
 
-## Storefront architecture / fixed launch policy
+**Do not treat customer artwork display inside checkout as a launch requirement. It is not needed.**
 
-Main Shopify storefronts:
+Desired/current architecture:
+
+- Customer uploads a source image to private Supabase storage before checkout.
+- The public handoff uses an opaque `pers_…` reference plus a proof; raw image bytes/private storage paths never enter a public cart/payment URL.
+- After proof validation, the encrypted cart carries only the opaque personalization reference.
+- Shopify draft/order line metadata receives **`Personalization ID`**.
+- The customer source image stays private; it does not need to be copied to Shopify public media or embedded into Limitless payment UI.
+- The personalization reference is associated with one payment attempt and then the resulting Shopify order.
+- Fulfillment can operate by exporting Shopify orders containing `Personalization ID`, then resolving those references through private tooling/API.
+- Alternatively, a shipping/production agent can consume an authenticated fulfillment endpoint that returns order context plus a short-lived signed artwork URL.
+- Private artwork access must be authenticated/time-limited.
+- Ordered source artwork retention: 90 days after order association for fulfillment/replacement support, then private source file deletion; non-image order/audit metadata may remain.
+
+Therefore “artwork binding” means **order-to-artwork association**, not checkout-page image embedding.
+
+## Customer launch policy v2
+
+Canonical policy text is in `docs/STORE_LAUNCH_POLICIES.md` and `lib/server/launch-policies.ts`.
+
+Shared policy:
+
+- USD checkout.
+- US, Canada, UK, New Zealand, Australia.
+- Free standard shipping.
+- Optional $4.99 priority processing once/order, unchecked by default.
+- Priority processing is not expedited carrier service and does not guarantee delivery.
+- Shopify calculates authoritative taxes and total.
+- Whop hosts payment-card entry; raw payment-card data is not collected by the storefront/Limitless.
+
+CHEFINGS / COZYINFANTS:
+
+- eligible non-personalized returns requested within 30 days of delivery;
+- items must be unused/original condition;
+- damaged, defective or incorrect orders reviewed for replacement/correction/refund;
+- cancellations accepted before fulfillment/production but not guaranteed after processing starts;
+- priority-processing fee non-refundable after priority processing begins.
+
+FACEJAMAS:
+
+- personalized items final sale except damaged, defective, incorrect or verified production-error cases;
+- qualifying issues may be replaced/corrected/refunded;
+- cancellation accepted before production but not guaranteed once production begins;
+- customer must have rights to uploaded image;
+- normal print placement/color variation may occur unless an explicit production proof is provided.
+
+Privacy language explicitly explains that Shopify stores an opaque `Personalization ID`, while authorized fulfillment operators retrieve the private source image using authenticated/time-limited tooling.
+
+Current monitored support contacts:
+
+- `support@chefings.com`
+- `support@cozyinfants.com`
+- `support@facejamas.com`
+
+Policy v2 has been authored but should not be treated as a real-charge authorization. Record current policy approval in the Launch Center/Supabase launch service before controlled acceptance.
+
+## Storefront / launch configuration
+
+Storefronts:
 
 - `chefings.com`
 - `cozyinfants.com`
@@ -153,25 +169,29 @@ Branded checkout origins:
 - `checkout.cozyinfants.com`
 - `checkout.facejamas.com`
 
-Launch policy:
+Launch configuration:
 
-- Currency: USD.
-- Countries: US, Canada, UK, New Zealand, Australia.
-- Standard shipping: free.
-- Priority processing: $4.99 USD once per order, unchecked by default.
-- Browser prices/tax/shipping/totals are never authoritative.
+- currency: USD;
+- countries: US, Canada, UK, New Zealand, Australia;
+- standard shipping: free;
+- priority processing: $4.99 once/order, unchecked by default.
 
-## Next actions — ordered
+All three brands are still `draft/demo` until launch acceptance is complete.
 
-1. Recover COZYINFANTS Shopify into the v2 vault and verify backend state.
-2. Recover FACEJAMAS Shopify into the v2 vault and verify backend state.
-3. Migrate quote/payment/reconciliation/Shopify-completion operations off remaining legacy Netlify credential/database dependencies.
-4. Run no-charge cart → branded checkout → authoritative Shopify quote QA for all three brands.
-5. Confirm support inboxes and approve shipping/returns/privacy policies.
-6. Keep `PUBLIC_PAYMENT_ENABLED=false`; immediately before any real charge obtain explicit owner authorization.
-7. Run one controlled acceptance purchase and verify signed Whop event, payment verification, exactly one Shopify order, confirmation state, retry idempotency, and FaceJamas artwork binding where applicable.
-8. Only after acceptance passes ask for explicit authorization to enable public customer payments.
+## Remaining work before controlled real payment
+
+1. Finish Next.js wiring for `limitless-launch-admin` and the short-lived private acceptance session/cookie.
+2. Sync the live launch-admin policy generator to policy v2.
+3. Verify the latest Netlify production deployment after that wiring.
+4. Run no-charge storefront cart → branded checkout → authoritative Shopify quote QA on all three brands.
+5. Record policy v2 approval for each brand.
+6. Arm only the controlled-acceptance gate while public payment remains OFF.
+7. Immediately before any real charge, obtain explicit owner authorization.
+8. Run the controlled purchase and verify exact Whop payment → signed callback → independent lookup → one Shopify order → confirmed state.
+9. For FaceJamas acceptance, verify the Shopify line item has `Personalization ID` and private fulfillment resolution works. No checkout image embedding is required.
+10. Verify duplicate/retry behavior cannot create another order.
+11. Record acceptance, then ask for explicit authorization before enabling public customer payments.
 
 ## Definition of done
 
-A customer can start on a Shopify-hosted brand storefront, pass a server-authenticated cart to the matching branded Limitless checkout, review an authoritative Shopify-calculated USD total, pay exactly that amount through Whop, and receive confirmation only after exactly one corresponding Shopify order exists with all required fulfillment data. Retries and duplicate notifications must never create duplicate orders or ask a paid customer to pay again.
+A customer can start from the correct Shopify storefront, pass a server-authenticated cart to the matching branded Limitless checkout, review an authoritative Shopify-calculated USD total, pay that exact amount through embedded Whop fields, and receive confirmation only after exactly one corresponding Shopify order exists with all required fulfillment metadata. FaceJamas Shopify orders include an opaque `Personalization ID` that authorized fulfillment tooling can resolve to the correct private source artwork. Retries and duplicate notifications never create duplicate orders or ask a paid customer to pay again.
