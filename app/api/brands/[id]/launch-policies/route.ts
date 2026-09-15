@@ -1,24 +1,20 @@
-import { z } from "zod";
-import { approveLaunchPolicy, launchPolicyStatus } from "@/lib/server/launch-policies";
-import { body, json, route } from "@/lib/server/http";
-import { requestSite } from "@/lib/server/hosts";
-import { HttpError, rateLimit, requireCredentials } from "@/lib/server/security";
-import { store } from "@/lib/server/store";
+import { launchAdminAction } from "@/lib/server/launch-admin-proxy";
 
-const handler = route(async (request: Request) => {
-  requireCredentials(request);
-  if (requestSite(request).kind !== "admin") throw new HttpError(404, "Page not available on this checkout domain.");
-  const match = new URL(request.url).pathname.match(/^\/api\/brands\/([a-zA-Z0-9_-]+)\/launch-policies$/);
-  if (!match) throw new HttpError(404, "Brand not found.");
-  const db = await store();
-  await db.brand(match[1]);
-  if (request.method === "GET") return json(await launchPolicyStatus(db, match[1]));
-  if (request.method === "POST") {
-    rateLimit("launch-policy-approval", 10, 60_000);
-    const input = z.object({ acknowledge: z.literal(true) }).strict().parse(await body(request));
-    return json(await approveLaunchPolicy(db, match[1], input.acknowledge), 201);
-  }
-  throw new HttpError(405, "Method not allowed.");
-});
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export { handler as GET, handler as POST };
+type RouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  return launchAdminAction(request, id, "policy-status");
+}
+
+export async function POST(request: Request, context: RouteContext) {
+  const { id } = await context.params;
+  let input: Record<string, unknown> = {};
+  try { input = await request.json() as Record<string, unknown>; }
+  catch { return Response.json({ error: "Invalid policy approval request." }, { status: 400 }); }
+  if (input.acknowledge !== true) return Response.json({ error: "Confirm that you reviewed and approve the current launch policies." }, { status: 422 });
+  return launchAdminAction(request, id, "approve-policy", { acknowledge: true });
+}
