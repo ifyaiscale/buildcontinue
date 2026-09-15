@@ -6,10 +6,10 @@ export { HttpError } from "./errors";
 
 const COOKIE = "limitless_session";
 const SESSION_SECONDS = 60 * 60 * 8;
-const ADMIN_SESSION_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-admin-session";
+const ADMIN_SESSION_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-admin-auth-v2";
 const ADMIN_SESSION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4Xz6jDxYJ76llFZi16S11RSYMq2t
-Y6+T/KWm/ewklepUMlu3souxRTWZd+luvv3BoBd2mWH5T1nfibdQ8pTonQ==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErX+FTG3Peu9nD2KcTwIMt7DwUVFN
+GVDKOnMN9AUWkUsTqwO+LY66AerM5bkAZ+fdsN053yl+1gZnEFqcETSs9g==
 -----END PUBLIC KEY-----`;
 
 type AdminSessionPayload = {
@@ -52,7 +52,7 @@ function validAdminToken(value: string, now = Date.now()) {
     return false;
   }
   const seconds = Math.floor(now / 1000);
-  return payload.v === 1 && payload.aud === "limitless-admin" && Number.isInteger(payload.iat) && Number.isInteger(payload.exp) && typeof payload.nonce === "string" && payload.nonce.length >= 24 && payload.iat <= seconds + 60 && payload.exp > seconds && payload.exp <= seconds + SESSION_SECONDS + 60;
+  return payload.v === 2 && payload.aud === "limitless-admin" && Number.isInteger(payload.iat) && Number.isInteger(payload.exp) && typeof payload.nonce === "string" && payload.nonce.length >= 24 && payload.iat <= seconds + 60 && payload.exp > seconds && payload.exp <= seconds + SESSION_SECONDS + 60;
 }
 
 export async function issueAdminSession(password: string) {
@@ -62,7 +62,7 @@ export async function issueAdminSession(password: string) {
     response = await fetch(ADMIN_SESSION_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ action: "login", password }),
       signal: AbortSignal.timeout(10000),
       cache: "no-store",
     });
