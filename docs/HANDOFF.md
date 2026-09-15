@@ -5,7 +5,6 @@ Last updated: 2026-09-15.
 ## Safety state
 
 - Production branch: `hoplite/beroia-65b17429`.
-- Current verified Netlify production deploy before docs-only updates: deploy `6aa8e87c69e3f5000803347f`, application commit `8e1ffb84da4a65e6063d543f0a777b14b567e13d`, state `ready`.
 - Customer charging remains OFF.
 - `PUBLIC_PAYMENT_ENABLED=false` must remain in production until controlled acceptance succeeds and the owner explicitly authorizes public payments.
 - Do not run a real charge merely because webhook transport now works.
@@ -75,14 +74,7 @@ No Whop API keys or signing secrets are stored in Git or this handoff.
 
 `limitless-whop-admin` v4 is the active Whop recovery service.
 
-It:
-
-1. validates the brand and previously assigned company ID,
-2. verifies the Whop API key against the real company,
-3. encrypts the API key + webhook signing secret with AES-256-GCM,
-4. upserts the encrypted v2 vault row.
-
-It deliberately bypasses the older connection-commit activity write because `limitless.activity.sequence` is `GENERATED ALWAYS AS IDENTITY` and the older RPC can fail with PostgreSQL `428C9` by manually writing that column.
+It validates the brand/company, verifies the Whop API key, encrypts the API key + webhook signing secret with AES-256-GCM, and upserts the encrypted v2 vault row. It deliberately bypasses the older connection-commit activity write because `limitless.activity.sequence` is `GENERATED ALWAYS AS IDENTITY` and the older RPC can fail with PostgreSQL `428C9` by manually writing that column.
 
 ### Whop receiver — verified transport
 
@@ -102,33 +94,32 @@ Current receiver behavior:
 
 The webhook event recorder was corrected so Postgres generates `limitless.webhook_events.sequence` itself. The previous implementation manually wrote an `IDENTITY ALWAYS` column and would have failed with PostgreSQL `428C9`.
 
-### Expected synthetic test response
+All three Whop dashboard tests returned HTTP 200 and persisted successfully. This proves signed webhook transport and persistence. It does NOT prove the real payment reconciliation path.
 
-All three Whop dashboard tests returned the expected shape:
+## Shopify recovery
 
-```json
-{"received":true,"duplicate":false,"syntheticTest":true,"accountMatchesBrand":false,"paymentIdentified":false}
-```
+### CHEFINGS — COMPLETE
 
-This proves signed webhook transport and persistence. It does NOT prove the real payment reconciliation path.
+- Store domain: `5ctqsk-tn.myshopify.com`.
+- Existing Dev Dashboard app: `Limitless - CHEFINGS`.
+- App has the required current scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
+- Connection method: Dev Dashboard app / client credentials grant with automatic short-lived token renewal.
+- User completed verification successfully through the Limitless dashboard.
+- Supabase confirms exactly one encrypted `shopify` credential row for Chefings in `public.limitless_provider_credentials_v2`.
+- Brand metadata has been backfilled safely without using the broken activity-sequence path and now reports Shopify `status=verified`, account `5ctqsk-tn.myshopify.com`.
+- No Shopify client secret or access token is stored in Git or this handoff.
 
-## Provider recovery still required
+### COZYINFANTS — STILL TO RECOVER
 
-Whop recovery is complete for all three brands.
+- Store domain: `1b1zsq-0y.myshopify.com`.
+- Use the corresponding Dev Dashboard app if present and select `Dev Dashboard app (automatic token renewal)` in Limitless.
+- Required minimum scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
 
-Remaining one-time credential recovery:
+### FACEJAMAS — STILL TO RECOVER
 
-- CHEFINGS Shopify credential.
-- COZYINFANTS Shopify credential.
-- FACEJAMAS Shopify credential.
-
-Historical Shopify account metadata remains present, but the old encrypted Shopify secrets are not decryptable on the fresh runtime.
-
-Known Shopify store domains:
-
-- CHEFINGS: `5ctqsk-tn.myshopify.com`
-- COZYINFANTS: `1b1zsq-0y.myshopify.com`
-- FACEJAMAS: `f0m103-zz.myshopify.com`
+- Store domain: `f0m103-zz.myshopify.com`.
+- Use the corresponding Dev Dashboard app if present and select `Dev Dashboard app (automatic token renewal)` in Limitless.
+- Required minimum scopes: `read_products`, `read_inventory`, `read_draft_orders`, `write_draft_orders`.
 
 Do not describe these stores as historically unconnected. The recovery issue concerns provider secret material on the fresh runtime.
 
@@ -172,13 +163,14 @@ Launch policy:
 
 ## Next actions — ordered
 
-1. Recover all three Shopify credentials into the v2 vault, one brand at a time, verifying store identity/scopes after each save.
-2. Migrate quote/payment/reconciliation/Shopify-completion operations off remaining legacy Netlify credential/database dependencies.
-3. Run no-charge cart → branded checkout → authoritative Shopify quote QA for all three brands.
-4. Confirm support inboxes and approve shipping/returns/privacy policies.
-5. Keep `PUBLIC_PAYMENT_ENABLED=false`; immediately before any real charge obtain explicit owner authorization.
-6. Run one controlled acceptance purchase and verify signed Whop event, payment verification, exactly one Shopify order, confirmation state, retry idempotency, and FaceJamas artwork binding where applicable.
-7. Only after acceptance passes ask for explicit authorization to enable public customer payments.
+1. Recover COZYINFANTS Shopify into the v2 vault and verify backend state.
+2. Recover FACEJAMAS Shopify into the v2 vault and verify backend state.
+3. Migrate quote/payment/reconciliation/Shopify-completion operations off remaining legacy Netlify credential/database dependencies.
+4. Run no-charge cart → branded checkout → authoritative Shopify quote QA for all three brands.
+5. Confirm support inboxes and approve shipping/returns/privacy policies.
+6. Keep `PUBLIC_PAYMENT_ENABLED=false`; immediately before any real charge obtain explicit owner authorization.
+7. Run one controlled acceptance purchase and verify signed Whop event, payment verification, exactly one Shopify order, confirmation state, retry idempotency, and FaceJamas artwork binding where applicable.
+8. Only after acceptance passes ask for explicit authorization to enable public customer payments.
 
 ## Definition of done
 
