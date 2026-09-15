@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { CartCheckoutError, CartCheckoutPage, type HandoffCartItem } from "@/components/cart-checkout";
 import { PaymentReturnPage } from "@/components/payment-return";
 import { pageSite } from "@/lib/server/page-site";
@@ -47,7 +48,10 @@ export default async function PublicCheckoutPage({ params, searchParams }: { par
   if (receipt) {
     try {
       const { brand } = await checkoutView(slug);
-      return <PaymentReturnPage brand={brand} receipt={receipt} />;
+      const cookieStore = await cookies();
+      const rawAttempt = cookieStore.get(`limitless_acceptance_attempt_${slug}`)?.value || "";
+      const acceptanceAttempt = /^attempt_[0-9a-f-]{36}$/.test(rawAttempt) ? rawAttempt : undefined;
+      return <PaymentReturnPage brand={brand} receipt={receipt} acceptanceAttempt={acceptanceAttempt} />;
     } catch {
       return <CartCheckoutError />;
     }
