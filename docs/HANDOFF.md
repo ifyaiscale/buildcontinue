@@ -5,7 +5,7 @@ Last updated: 2026-09-15.
 ## Safety state
 
 - Production branch: `hoplite/beroia-65b17429`.
-- Current verified Netlify production deploy before this docs-only update: deploy `6aa8e87c69e3f5000803347f`, application commit `8e1ffb84da4a65e6063d543f0a777b14b567e13d`, state `ready`.
+- Current verified Netlify production deploy before docs-only updates: deploy `6aa8e87c69e3f5000803347f`, application commit `8e1ffb84da4a65e6063d543f0a777b14b567e13d`, state `ready`.
 - Customer charging remains OFF.
 - `PUBLIC_PAYMENT_ENABLED=false` must remain in production until controlled acceptance succeeds and the owner explicitly authorizes public payments.
 - Do not run a real charge merely because webhook transport now works.
@@ -35,31 +35,54 @@ New provider credentials are encrypted with AES-256-GCM before storage. The key 
 
 The legacy provider ciphertext remains separate and unreadable without the lost original key. Each provider therefore needs a one-time controlled re-entry into the v2 vault.
 
-## COZYINFANTS Whop — recovered and webhook transport verified
+## Whop recovery — ALL THREE BRANDS COMPLETE
 
-COZYINFANTS Whop is now successfully recovered into the new Supabase credential vault.
+All three brand Whop credentials have now been re-verified and securely stored in the Supabase v2 provider vault. Each brand has a dedicated manually-created Whop webhook for `payment.succeeded`, and each webhook has passed a signed Whop dashboard test with HTTP 200.
+
+### CHEFINGS
+
+- Brand ID: `brand_570bb818-40e1-43c5-b34e-9c8bfbf82f9e`
+- Company ID: `biz_oSecL7MrGnjRmk`
+- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
+- Webhook endpoint:
+  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_570bb818-40e1-43c5-b34e-9c8bfbf82f9e`
+- Signed dashboard `payment.succeeded` test returned HTTP 200.
+- Supabase confirms one persisted Chefings webhook event (`sequence=2`).
+
+### COZYINFANTS
 
 - Brand ID: `brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
 - Company ID: `biz_ZfAubYoFlaajTC`
-- Exactly one encrypted `whop` credential row exists for Cozy in `limitless_provider_credentials_v2`.
-- No API key or signing secret is stored in Git or this handoff.
-- `limitless-whop-admin` v4 is the active recovery service for Whop credential verification + encrypted vault save.
-- v4 deliberately bypasses the older connection-commit activity write that can fail on `limitless.activity.sequence` (`IDENTITY ALWAYS`, PostgreSQL `428C9`).
+- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
+- Webhook endpoint:
+  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
+- Signed dashboard `payment.succeeded` test returned HTTP 200.
+- Supabase confirms one persisted Cozy webhook event (`sequence=1`).
 
-The Cozy Whop webhook was created manually in the Whop dashboard.
+### FACEJAMAS
 
-Endpoint:
+- Brand ID: `brand_dd7799da-caef-4abc-8ee0-1a161e59a2c6`
+- Company ID: `biz_MW3bKLHdo3ItcR`
+- Exactly one encrypted `whop` credential row exists in `limitless_provider_credentials_v2`.
+- Webhook endpoint:
+  `https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_dd7799da-caef-4abc-8ee0-1a161e59a2c6`
+- Signed dashboard `payment.succeeded` test returned HTTP 200.
+- Supabase confirms one persisted FaceJamas webhook event (`sequence=3`).
 
-`https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-whop-webhook?brand=brand_b014e3c8-06b4-4834-b4a7-772dadf8a607`
+No Whop API keys or signing secrets are stored in Git or this handoff.
 
-Settings:
+### Whop connection service
 
-- API version `v1`
-- Event `payment.succeeded` only
-- Connected-account events OFF
-- Enabled ON
+`limitless-whop-admin` v4 is the active Whop recovery service.
 
-The signing secret is stored encrypted with the Cozy Whop credential bundle.
+It:
+
+1. validates the brand and previously assigned company ID,
+2. verifies the Whop API key against the real company,
+3. encrypts the API key + webhook signing secret with AES-256-GCM,
+4. upserts the encrypted v2 vault row.
+
+It deliberately bypasses the older connection-commit activity write because `limitless.activity.sequence` is `GENERATED ALWAYS AS IDENTITY` and the older RPC can fail with PostgreSQL `428C9` by manually writing that column.
 
 ### Whop receiver — verified transport
 
@@ -68,7 +91,7 @@ Supabase Edge Function `limitless-whop-webhook` is ACTIVE at version 4.
 Current receiver behavior:
 
 - Reads encrypted Whop credentials from the v2 vault.
-- Imports the vault AES key as raw 32-byte AES-256 material, avoiding the Deno JWK import incompatibility.
+- Imports the vault AES key as raw 32-byte AES-256 material.
 - Verifies the raw request body using `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
 - Uses the Whop `ws_...` / `whsec_...` signing secret exactly as stored as UTF-8 HMAC key material; only the `v1,<signature>` header payload is base64-decoded.
 - Enforces a five-minute replay window.
@@ -79,41 +102,39 @@ Current receiver behavior:
 
 The webhook event recorder was corrected so Postgres generates `limitless.webhook_events.sequence` itself. The previous implementation manually wrote an `IDENTITY ALWAYS` column and would have failed with PostgreSQL `428C9`.
 
-### Verified Cozy test result
+### Expected synthetic test response
 
-A Whop dashboard `payment.succeeded` test returned HTTP 200:
+All three Whop dashboard tests returned the expected shape:
 
 ```json
 {"received":true,"duplicate":false,"syntheticTest":true,"accountMatchesBrand":false,"paymentIdentified":false}
 ```
 
-This is the expected synthetic-test result: signature verification passed, the request was accepted, no Limitless payment attempt was identified, and no real order/payment processing occurred.
-
-Supabase confirms one Cozy webhook event is persisted (`sequence=1`).
+This proves signed webhook transport and persistence. It does NOT prove the real payment reconciliation path.
 
 ## Provider recovery still required
 
-Historical provider account metadata remains present, but the old provider secrets are not decryptable on the fresh runtime.
+Whop recovery is complete for all three brands.
 
-Remaining one-time recovery:
+Remaining one-time credential recovery:
 
-- CHEFINGS Whop credential + dedicated webhook signing secret.
-- FACEJAMAS Whop credential + dedicated webhook signing secret.
 - CHEFINGS Shopify credential.
 - COZYINFANTS Shopify credential.
 - FACEJAMAS Shopify credential.
 
-Known Whop company IDs:
+Historical Shopify account metadata remains present, but the old encrypted Shopify secrets are not decryptable on the fresh runtime.
 
-- CHEFINGS: `biz_oSecL7MrGnjRmk`
-- COZYINFANTS: `biz_ZfAubYoFlaajTC`
-- FACEJAMAS: `biz_MW3bKLHdo3ItcR`
+Known Shopify store domains:
 
-Do not describe these brands as historically unconnected. The recovery issue concerns provider secret material on the fresh runtime.
+- CHEFINGS: `5ctqsk-tn.myshopify.com`
+- COZYINFANTS: `1b1zsq-0y.myshopify.com`
+- FACEJAMAS: `f0m103-zz.myshopify.com`
+
+Do not describe these stores as historically unconnected. The recovery issue concerns provider secret material on the fresh runtime.
 
 ## Payment backend status — NOT acceptance-ready yet
 
-Webhook transport is now working for Cozy, but the full post-payment reconciliation path has not yet been migrated off all legacy Netlify credential/database dependencies.
+Signed Whop webhook transport is now working for all three brands, but the full post-payment reconciliation path has not yet been migrated off all legacy Netlify credential/database dependencies.
 
 Before any controlled real charge, the Supabase-backed path must safely:
 
@@ -151,15 +172,13 @@ Launch policy:
 
 ## Next actions — ordered
 
-1. Recover CHEFINGS Whop into the v2 vault, create its manual `payment.succeeded` webhook, and confirm an HTTP 200 synthetic test.
-2. Recover FACEJAMAS Whop the same way and confirm an HTTP 200 synthetic test.
-3. Recover all three Shopify credentials into the v2 vault.
-4. Migrate quote/payment/reconciliation/Shopify-completion operations off remaining legacy Netlify credential/database dependencies.
-5. Run no-charge cart → branded checkout → authoritative Shopify quote QA for all three brands.
-6. Confirm support inboxes and approve shipping/returns/privacy policies.
-7. Keep `PUBLIC_PAYMENT_ENABLED=false`; immediately before any real charge obtain explicit owner authorization.
-8. Run one controlled acceptance purchase and verify signed Whop event, payment verification, exactly one Shopify order, confirmation state, retry idempotency, and FaceJamas artwork binding where applicable.
-9. Only after acceptance passes ask for explicit authorization to enable public customer payments.
+1. Recover all three Shopify credentials into the v2 vault, one brand at a time, verifying store identity/scopes after each save.
+2. Migrate quote/payment/reconciliation/Shopify-completion operations off remaining legacy Netlify credential/database dependencies.
+3. Run no-charge cart → branded checkout → authoritative Shopify quote QA for all three brands.
+4. Confirm support inboxes and approve shipping/returns/privacy policies.
+5. Keep `PUBLIC_PAYMENT_ENABLED=false`; immediately before any real charge obtain explicit owner authorization.
+6. Run one controlled acceptance purchase and verify signed Whop event, payment verification, exactly one Shopify order, confirmation state, retry idempotency, and FaceJamas artwork binding where applicable.
+7. Only after acceptance passes ask for explicit authorization to enable public customer payments.
 
 ## Definition of done
 
