@@ -120,13 +120,15 @@ async function verifyShopify(connection: ShopifyConnection) {
   const returned = typeof result.data?.shop?.myshopifyDomain === "string" ? result.data.shop.myshopifyDomain.toLowerCase() : "";
   if (returned !== connection.domain) throw new Error(`Shopify identifies this store as ${returned || "another store"}.`);
   const scopes = Array.isArray(result.data?.currentAppInstallation?.accessScopes)
-    ? result.data!.currentAppInstallation!.accessScopes!.map(s => typeof s.handle === "string" ? s.handle : "")
+    ? result.data!.currentAppInstallation!.accessScopes!.map(s => typeof s.handle === "string" ? s.handle : "").filter(Boolean)
     : [];
-  const products = scopes.includes("read_products") || scopes.includes("write_products");
-  const inventory = scopes.includes("read_inventory") || scopes.includes("write_inventory");
-  const draftOrders = scopes.includes("write_draft_orders");
-  if (!products || !inventory || !draftOrders) {
-    throw new Error("Grant read_products, read_inventory, and write_draft_orders before connecting Shopify.");
+  const missing: string[] = [];
+  if (!(scopes.includes("read_products") || scopes.includes("write_products"))) missing.push("read_products");
+  if (!(scopes.includes("read_inventory") || scopes.includes("write_inventory"))) missing.push("read_inventory");
+  if (!scopes.includes("write_draft_orders")) missing.push("write_draft_orders");
+  if (missing.length) {
+    const grantedRelevant = scopes.filter(s => ["read_products","write_products","read_inventory","write_inventory","read_draft_orders","write_draft_orders"].includes(s));
+    throw new Error(`Shopify granted this installed app: ${grantedRelevant.length ? grantedRelevant.join(", ") : "none of the required scopes"}. Missing: ${missing.join(", ")}.`);
   }
   return { domain: returned, token, scopes };
 }
