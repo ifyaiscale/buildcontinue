@@ -12,12 +12,14 @@ type Calculation = {
   totals: { subtotalCents: number; priorityCents: number; shippingCents: number; taxCents: number; discountCents: number; totalCents: number; taxesIncluded: boolean };
 };
 const dollars = (cents: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+const PERSONALIZATION_REF = /^pers_[0-9a-f-]{36}$/i;
 
 export function PricingDiagnostic({ brand }: { brand: Brand }) {
   const products = brand.products.filter(product => product.available && product.variantId);
   const [productId, setProductId] = useState(products[0]?.id ?? "");
   const [quantity, setQuantity] = useState(1);
   const [priority, setPriority] = useState(false);
+  const [personalizationRef, setPersonalizationRef] = useState("");
   const [address, setAddress] = useState({ firstName: "", lastName: "", address1: "", city: "", provinceCode: "", zip: "", countryCode: "US" });
   const [result, setResult] = useState<Calculation | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,12 +30,22 @@ export function PricingDiagnostic({ brand }: { brand: Brand }) {
   const [completion, setCompletion] = useState("");
   const paymentKey = useRef("");
   const revision = useRef(0);
-  function invalidate() { revision.current++; setResult(null); setError(""); paymentKey.current = ""; }
+  const needsPersonalization = brand.slug === "facejamas";
+  const personalizationReady = !needsPersonalization || PERSONALIZATION_REF.test(personalizationRef.trim());
+
+  function item() {
+    return {
+      productId,
+      quantity,
+      ...(needsPersonalization && personalizationRef.trim() ? { personalizationRef: personalizationRef.trim() } : {}),
+    };
+  }
+  function invalidate() { revision.current++; setResult(null); setError(""); setPayment(null); setPaymentId(""); setCompletion(""); paymentKey.current = ""; }
   async function preparePayment() {
     setBusy(true); setError("");
     paymentKey.current ||= crypto.randomUUID();
     try {
-      const response = await dashboardFetch(`/api/brands/${brand.id}/payment-start`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": paymentKey.current }, body: JSON.stringify({ email, items: [{ productId, quantity }], shippingAddress: { ...address, provinceCode: address.provinceCode || undefined }, priority }) });
+      const response = await dashboardFetch(`/api/brands/${brand.id}/payment-start`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": paymentKey.current }, body: JSON.stringify({ email, items: [item()], shippingAddress: { ...address, provinceCode: address.provinceCode || undefined }, priority }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Payment preparation failed.");
       const url = new URL(data.purchaseUrl);
@@ -58,7 +70,7 @@ export function PricingDiagnostic({ brand }: { brand: Brand }) {
     setBusy(true); setError("");
     try {
       const response = await dashboardFetch(`/api/brands/${brand.id}/launch-quote`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        items: [{ productId, quantity }],
+        items: [item()],
         shippingAddress: { ...address, provinceCode: address.provinceCode || undefined },
         priority,
       }) });
@@ -69,7 +81,7 @@ export function PricingDiagnostic({ brand }: { brand: Brand }) {
       if (current === revision.current) { setResult(null); setError(error instanceof Error ? error.message : "The calculation could not be completed."); }
     } finally { setBusy(false); }
   }
-  function submit(event: FormEvent) { event.preventDefault(); void calculate(); }
+  function submit(event: FormEvent) { event.preventDefault(); if (personalizationReady) void calculate(); }
   const enabled = brand.shopify.status === "verified" && products.length > 0;
   return <section className="panel" style={{ padding: 24, marginTop: 20 }}>
     <h2>Check checkout total</h2>
@@ -87,10 +99,11 @@ export function PricingDiagnostic({ brand }: { brand: Brand }) {
           <label className="field">Destination<select value={address.countryCode} onChange={e => { invalidate(); setAddress({ ...address, countryCode: e.target.value, provinceCode: "", zip: "" }); }}>
             {LAUNCH_COUNTRY_CODES.map(code => <option value={code} key={code}>{COUNTRY_NAMES[code]}</option>)}
           </select></label>
+          {needsPersonalization && <label className="field">FaceJamas personalization reference<input required value={personalizationRef} placeholder="pers_…" onChange={e => { invalidate(); setPersonalizationRef(e.target.value); }} /><span className="field-hint">Use the reference returned by a successful private FaceJamas photo upload. The controlled purchase must exercise the real personalization binding.</span></label>}
         </div>
         {checkoutExperience(brand).priorityEnabled && <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16 }}><input type="checkbox" checked={priority} onChange={e => { invalidate(); setPriority(e.target.checked); }} />Optional priority processing · $4.99 per order</label>}
         <p className="field-hint">All amounts are USD. Standard shipping is free. Use a representative delivery address; the check does not save it in Limitless.</p>
-        <button type="submit" className="button secondary">{busy ? "Calculating…" : "Calculate total"}</button>
+        <button type="submit" className="button secondary" disabled={!personalizationReady}>{busy ? "Calculating…" : needsPersonalization && !personalizationReady ? "Add personalization reference" : "Calculate total"}</button>
       </fieldset>
       {error && <div className="inline-error" role="alert">{error}</div>}
       {result && <div style={{ marginTop: 20 }} aria-live="polite">
@@ -106,7 +119,7 @@ export function PricingDiagnostic({ brand }: { brand: Brand }) {
             <section style={{ marginTop: 24 }}>
               <h3>Administrator payment acceptance</h3>
               <p>Preparing payment reserves a Shopify draft and saves the delivery details securely. Payment testing must be enabled by the operator first. Opening the Whop link can lead to a real charge; check its environment and total before paying.</p>
-              {!payment ? <><label className="field">Buyer email<input type="email" value={email} disabled={busy} onChange={e => { setEmail(e.target.value); paymentKey.current = ""; }} /></label><button className="button secondary" type="button" disabled={busy || !email} onClick={() => void preparePayment()}>Prepare payment</button></> : <>
+              {!payment ? <><label className="field">Buyer email<input type="email" value={email} disabled={busy} onChange={e => { setEmail(e.target.value); paymentKey.current = ""; }} /></label><button className="button secondary" type="button" disabled={busy || !email || !personalizationReady} onClick={() => void preparePayment()}>Prepare payment</button></> : <>
                 <p>Payment total: {dollars(payment.totalCents)}</p>
                 <a href={payment.purchaseUrl} target="_blank" rel="noopener noreferrer">Open Whop checkout</a>
                 <label className="field">Whop payment ID<input value={paymentId} disabled={busy} placeholder="pay_…" onChange={e => setPaymentId(e.target.value)} /></label>
