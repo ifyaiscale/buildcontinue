@@ -39,6 +39,7 @@ type EmbeddedPaymentSession = {
 
 const money = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: CHECKOUT_CURRENCY }).format(value);
 const cents = (value: number) => money(value / 100);
+const PAYMENT_SESSION_REFRESH_BUFFER_MS = 15_000;
 
 function brandStyle(brand: Brand) {
   const accent = /^#[0-9a-f]{6}$/i.test(brand.accent) ? brand.accent : "#344b40";
@@ -179,6 +180,7 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
         throw new Error("The checkout total changed. Please wait for the total to update before paying.");
       }
       if (!/^plan_[A-Za-z0-9]+$/.test(String(result.planId || "")) || !/^ch_[A-Za-z0-9]+$/.test(String(result.sessionId || ""))) throw new Error("The payment provider returned an invalid embedded checkout session.");
+      if (!Number.isSafeInteger(result.expiresAt) || result.expiresAt <= Date.now() + PAYMENT_SESSION_REFRESH_BUFFER_MS) throw new Error("The payment provider returned an expired checkout session.");
       const paymentReturnUrl = new URL(String(result.returnUrl || ""));
       if (paymentReturnUrl.protocol !== "https:" || paymentReturnUrl.hostname !== window.location.hostname || paymentReturnUrl.pathname !== `/checkout/${brand.slug}`) throw new Error("The payment provider returned an invalid return URL.");
       if (sequence !== paymentSequence.current) return;
@@ -204,6 +206,19 @@ export function CartCheckoutPage({ brand, initialItems, cartToken }: { brand: Br
     const timer = window.setTimeout(() => { void prepareEmbeddedPayment(); }, 250);
     return () => window.clearTimeout(timer);
   }, [quote, quotedRequest, paymentSession, preparingPayment]);
+
+  useEffect(() => {
+    if (!paymentSession) return;
+    const refreshIn = Math.max(0, paymentSession.expiresAt - Date.now() - PAYMENT_SESSION_REFRESH_BUFFER_MS);
+    const timer = window.setTimeout(() => {
+      paymentSequence.current += 1;
+      paymentSubmission.current = null;
+      setPaymentSession(null);
+      setPreparingPayment(false);
+      setError("");
+    }, refreshIn);
+    return () => window.clearTimeout(timer);
+  }, [paymentSession]);
 
   if (!cartValid) return <CartCheckoutError domain={brand.domain} />;
 
