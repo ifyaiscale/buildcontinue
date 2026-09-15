@@ -21,7 +21,10 @@ function header(headers: Headers, name: string) {
 }
 
 export function verifyWhopWebhook(rawBody: string, headers: Headers, secret: string, nowMs = Date.now()): WhopWebhookEvent {
-  if (!/^ws_[A-Za-z0-9_-]{16,}$/.test(secret)) throw new HttpError(503, "Whop webhook signing is not configured for this brand.");
+  // Whop's current webhook guide documents ws_ secrets, while the API reference
+  // also shows whsec_ examples. Treat both as opaque signing keys exactly as
+  // returned by Whop; never strip or transform the prefix.
+  if (!/^(?:ws|whsec)_[A-Za-z0-9_-]{16,}$/.test(secret)) throw new HttpError(503, "Whop webhook signing is not configured for this brand.");
   const webhookId = header(headers, "webhook-id");
   const timestamp = header(headers, "webhook-timestamp");
   const signatureHeader = header(headers, "webhook-signature");
