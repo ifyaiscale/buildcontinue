@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const CHECKOUT_RUNTIME = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-checkout-runtime";
+const ACCEPTANCE_RUNTIME = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-acceptance-checkout";
 const ACTIONS = new Set(["quote", "payment-start", "status"]);
 
 type RouteContext = { params: Promise<{ slug: string; action: string }> };
@@ -17,12 +18,33 @@ function response(body: string, status: number) {
   });
 }
 
+function acceptanceToken(request: Request, slug: string) {
+  const name = `limitless_acceptance_${slug}=`;
+  const value = (request.headers.get("cookie") || "")
+    .split(";")
+    .map(part => part.trim())
+    .find(part => part.startsWith(name))
+    ?.slice(name.length) || "";
+  return /^v3\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value) && value.length <= 5000 ? value : "";
+}
+
+function sanitizeQuote(body: string) {
+  try {
+    const value = JSON.parse(body) as Record<string, unknown>;
+    if (value && typeof value === "object") delete value.draftInput;
+    return JSON.stringify(value);
+  } catch {
+    return body;
+  }
+}
+
 async function forward(request: Request, context: RouteContext) {
   const { slug, action } = await context.params;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || !ACTIONS.has(action)) {
     return Response.json({ error: "Checkout endpoint not found." }, { status: 404 });
   }
 
+  const privateAcceptance = action !== "status" ? acceptanceToken(request, slug) : "";
   let payload: Record<string, unknown>;
   if (action === "status") {
     if (request.method !== "GET") return Response.json({ error: "Method not allowed." }, { status: 405 });
@@ -36,20 +58,23 @@ async function forward(request: Request, context: RouteContext) {
     let input: unknown;
     try { input = JSON.parse(raw); }
     catch { return Response.json({ error: "Invalid checkout request." }, { status: 400 }); }
+
     payload = action === "quote"
-      ? { action: "quote", slug, input }
+      ? { action: "quote", slug, input, ...(privateAcceptance ? { acceptanceToken: privateAcceptance } : {}) }
       : {
           action: "payment-start",
           slug,
           input,
           idempotencyKey: request.headers.get("idempotency-key") ?? "",
           returnOrigin: new URL(request.url).origin,
+          ...(privateAcceptance ? { acceptanceToken: privateAcceptance } : {}),
         };
   }
 
+  const target = privateAcceptance ? ACCEPTANCE_RUNTIME : CHECKOUT_RUNTIME;
   let upstream: Response;
   try {
-    upstream = await fetch(CHECKOUT_RUNTIME, {
+    upstream = await fetch(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -59,7 +84,9 @@ async function forward(request: Request, context: RouteContext) {
   } catch {
     return Response.json({ error: "Checkout service is temporarily unavailable." }, { status: 503 });
   }
-  return response(await upstream.text(), upstream.status);
+
+  const body = await upstream.text();
+  return response(action === "quote" && upstream.ok ? sanitizeQuote(body) : body, upstream.status);
 }
 
 export async function GET(request: Request, context: RouteContext) { return forward(request, context); }
