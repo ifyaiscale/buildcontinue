@@ -24,7 +24,12 @@ function brandStyle(brand: Brand) {
   return { "--co-accent": accent, "--co-accent-ink": luminance > 0.179 ? "#111111" : "#ffffff" } as CSSProperties;
 }
 
-export function PaymentReturnPage({ brand, receipt }: { brand: Brand; receipt: string }) {
+function AcceptanceReference({ attemptId }: { attemptId?: string }) {
+  if (!attemptId) return null;
+  return <div style={{ marginTop: 18, padding: 14, border: "1px solid rgba(0,0,0,.12)", borderRadius: 12 }}><strong>Controlled acceptance attempt</strong><div style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", wordBreak: "break-all" }}>{attemptId}</div><small>Use this exact reference in Launch Center after the order is confirmed.</small></div>;
+}
+
+export function PaymentReturnPage({ brand, receipt, acceptanceAttempt }: { brand: Brand; receipt: string; acceptanceAttempt?: string }) {
   const [status, setStatus] = useState<PaymentStatus | null>(null);
   const [error, setError] = useState("");
   const returnUrl = brand.domain ? `https://${brand.domain}` : "/";
@@ -56,12 +61,12 @@ export function PaymentReturnPage({ brand, receipt }: { brand: Brand; receipt: s
     <header className="co-header"><div className="co-brand"><span className="co-brand-mark">{brand.logoInitial}</span><span>{brand.name}</span></div><span className="co-header-label"><ShoppingBag size={17} /> Payment status</span></header>
     <section className="co-confirmation" aria-live="polite" aria-atomic="true">
       {!status && !error && <><div className="co-success-icon"><Clock3 size={34} /></div><div className="co-eyebrow">CHECKING PAYMENT</div><h1>Confirming your order…</h1><p>Keep this page open while we verify the payment and Shopify order.</p></>}
-      {error && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">STATUS UNAVAILABLE</div><h1>We couldn't confirm the payment yet.</h1><p>{error}</p><p>If you completed payment, do not pay again. Return here later or contact the store if the status does not update.</p></>}
-      {status?.status === "confirmed" && <><div className="co-success-icon"><CheckCircle2 size={34} /></div><div className="co-eyebrow">PAYMENT CONFIRMED</div><h1>Your order is confirmed.</h1><p>Your payment was verified and the Shopify order was completed successfully.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl></>}
-      {status?.status === "processing" && <><div className="co-success-icon"><Clock3 size={34} /></div><div className="co-eyebrow">PAYMENT RECEIVED</div><h1>We're finishing your order.</h1><p>Your payment has been verified. Shopify synchronization is still processing. Do not pay again.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl></>}
-      {status?.status === "awaiting_payment" && <><div className="co-success-icon"><Clock3 size={34} /></div><div className="co-eyebrow">WAITING FOR CONFIRMATION</div><h1>We're checking the payment.</h1><p>If you just completed payment, keep this page open while the signed provider confirmation arrives.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl></>}
-      {status?.status === "review" && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">PAYMENT NEEDS REVIEW</div><h1>Do not pay again.</h1><p>A payment was recorded, but the order needs merchant review before we can confirm fulfillment.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl></>}
-      {status?.status === "expired" && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">CHECKOUT EXPIRED</div><h1>This payment attempt expired.</h1><p>No successful payment has been confirmed for this attempt. Return to the store and begin a fresh checkout.</p></>}
+      {error && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">STATUS UNAVAILABLE</div><h1>We couldn't confirm the payment yet.</h1><p>{error}</p><p>If you completed payment, do not pay again. Return here later or contact the store if the status does not update.</p><AcceptanceReference attemptId={acceptanceAttempt} /></>}
+      {status?.status === "confirmed" && <><div className="co-success-icon"><CheckCircle2 size={34} /></div><div className="co-eyebrow">PAYMENT CONFIRMED</div><h1>Your order is confirmed.</h1><p>Your payment was verified and the Shopify order was completed successfully.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl><AcceptanceReference attemptId={acceptanceAttempt} /></>}
+      {status?.status === "processing" && <><div className="co-success-icon"><Clock3 size={34} /></div><div className="co-eyebrow">PAYMENT RECEIVED</div><h1>We're finishing your order.</h1><p>Your payment has been verified. Shopify synchronization is still processing. Do not pay again.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl><AcceptanceReference attemptId={acceptanceAttempt} /></>}
+      {status?.status === "awaiting_payment" && <><div className="co-success-icon"><Clock3 size={34} /></div><div className="co-eyebrow">WAITING FOR CONFIRMATION</div><h1>We're checking the payment.</h1><p>If you just completed payment, keep this page open while the signed provider confirmation arrives.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl><AcceptanceReference attemptId={acceptanceAttempt} /></>}
+      {status?.status === "review" && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">PAYMENT NEEDS REVIEW</div><h1>Do not pay again.</h1><p>A payment was recorded, but the order needs merchant review before we can confirm fulfillment.</p><dl><div><dt>Total</dt><dd>{money(status.totalCents)}</dd></div></dl><AcceptanceReference attemptId={acceptanceAttempt} /></>}
+      {status?.status === "expired" && <><div className="co-success-icon"><TriangleAlert size={34} /></div><div className="co-eyebrow">CHECKOUT EXPIRED</div><h1>This payment attempt expired.</h1><p>No successful payment has been confirmed for this attempt. Return to the store and begin a fresh checkout.</p><AcceptanceReference attemptId={acceptanceAttempt} /></>}
       <a className="co-button" href={returnUrl}><ArrowLeft size={16} /> Return to {brand.name}</a>
     </section>
   </main>;
