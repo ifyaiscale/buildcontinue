@@ -1,12 +1,13 @@
 import { Dashboard } from "@/components/dashboard";
 import { CheckoutPage } from "@/components/checkout";
 import { pageSite } from "@/lib/server/page-site";
+import { authConfigured } from "@/lib/server/security";
 import "./checkout.css";
 
 async function reportRuntimeHealth() {
   if (process.env.NODE_ENV !== "production") return;
   const payload = {
-    adminCredentialPresent: (process.env.ADMIN_PASSWORD || "").length >= 16 || (process.env.ADMIN_PASSWORD_HASH || "").length > 0,
+    adminCredentialPresent: authConfigured(),
     sessionSecretPresent: (process.env.SESSION_SECRET || "").length >= 32,
     databaseUrlPresent: (process.env.DATABASE_URL || "").length > 0,
     credentialEncryptionKeyPresent: /^[a-fA-F0-9]{64}$/.test(process.env.CREDENTIAL_ENCRYPTION_KEY || ""),
