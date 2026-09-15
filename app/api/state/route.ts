@@ -55,7 +55,7 @@ export const GET = route(async (request: Request) => {
     environment: {
       demo: false,
       liveEnabled: process.env.PUBLIC_PAYMENT_ENABLED === "true",
-      credentialsConfigured: false,
+      credentialsConfigured: true,
       authenticated: true,
     },
   });
