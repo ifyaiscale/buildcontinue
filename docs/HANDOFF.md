@@ -76,6 +76,7 @@ Source tracking:
 - `migrations/008_checkout_runtime_v3.sql`
 - `migrations/009_launch_admin_v3.sql`
 - `migrations/010_lock_bootstrap_runtime_role.sql`
+- `migrations/011_fix_launch_policy_commit_validation.sql`
 
 The old bootstrap role RPC was locked down after the Supabase security advisor identified that it was executable by browser roles. Anonymous/authenticated/service-role execution was revoked; the remaining advisor entries are informational RLS-with-no-policy notices for intentionally private deny-by-default tables.
 
@@ -90,7 +91,7 @@ Latest verified production application deploy containing the private acceptance 
 - secret scan: zero matches
 - branch `hoplite/beroia-65b17429`
 
-Later commits `7771fb890cf596b8633d04fb0cb04c89c44d242d` and `a803342f6e74aa929417c95f9478f6a95d121182` only add tracked SQL migration files; they do not alter the built application runtime.
+Later commits `7771fb890cf596b8633d04fb0cb04c89c44d242d`, `a803342f6e74aa929417c95f9478f6a95d121182`, and `6ca6c6fae3887883ae6576096b7c2a64eaea9c65` add tracked SQL migration files/documentation; they do not weaken payment gates.
 
 ## Payment and reconciliation behavior
 
@@ -185,7 +186,7 @@ Current architecture:
 
 “Artwork binding” therefore means **order-to-artwork association**, not checkout-page image embedding.
 
-## Customer launch policy v2
+## Customer launch policy v2 — APPROVED FOR ALL THREE BRANDS
 
 Canonical policy text is in `docs/STORE_LAUNCH_POLICIES.md` and `lib/server/launch-policies.ts`; `limitless-launch-admin` v2 uses the same wording.
 
@@ -216,7 +217,7 @@ FACEJAMAS:
 - normal print placement/color variation may occur unless an explicit production proof is provided;
 - Shopify stores an opaque Personalization ID while fulfillment retrieves private artwork through authenticated/time-limited tooling.
 
-Policy v2 is authored but policy approval metadata still requires the authenticated owner approval action in Launch Center. Policy approval is not a real-charge authorization.
+Owner approved policy v2 for CHEFINGS, COZYINFANTS and FACEJAMAS on 2026-09-15. The initial Launch Center approval clicks exposed a validation bug in `limitless_launch_policy_commit`; the RPC was corrected (`OR` validation instead of accidental string concatenation), and all three explicit owner approvals were then persisted with their current policy-v2 hashes. This approval is **not** authorization for a real charge or for public payment enablement.
 
 ## Storefront / launch configuration
 
@@ -243,16 +244,15 @@ All three brands remain `draft/demo` until launch acceptance is complete.
 
 ## Remaining work before public launch — ordered
 
-1. In authenticated Launch Center, approve the current policy v2 for the brand(s) being accepted. Support contacts are already present.
-2. Confirm Launch Center readiness shows providers/catalog/shipping/policy ready while both payment gates remain OFF.
-3. Immediately before a real charge, obtain explicit owner authorization for one controlled real acceptance purchase.
-4. Only then set `payment_acceptance_enabled=true` while keeping `public_payment_enabled=false`.
-5. Use the Launch Center **Start private acceptance checkout** action for CHEFINGS first and complete one real purchase in the browser-only 20-minute acceptance session.
-6. Verify exact Whop payment → signed callback → independent Whop lookup → one Shopify order → confirmed customer state; retry/duplicate delivery must not create a second order.
-7. Record the shown immutable `attempt_...` ID in Launch Center.
-8. Run a FaceJamas acceptance purchase if required for personalized-order fulfillment verification; confirm Shopify has `Personalization ID` and private fulfillment resolution works. No checkout image embedding is required.
-9. Activate the accepted brand to `live/live` while public payment can still remain OFF.
-10. Ask for separate explicit owner authorization before setting `public_payment_enabled=true` for customers.
+1. Confirm current Launch Center readiness shows providers/catalog/shipping/policy ready while both payment gates remain OFF.
+2. Immediately before a real charge, obtain explicit owner authorization for one controlled real acceptance purchase.
+3. Only then set `payment_acceptance_enabled=true` while keeping `public_payment_enabled=false`.
+4. Use the Launch Center **Start private acceptance checkout** action for CHEFINGS first and complete one real purchase in the browser-only 20-minute acceptance session.
+5. Verify exact Whop payment → signed callback → independent Whop lookup → one Shopify order → confirmed customer state; retry/duplicate delivery must not create a second order.
+6. Record the shown immutable `attempt_...` ID in Launch Center.
+7. Run a FaceJamas acceptance purchase if required for personalized-order fulfillment verification; confirm Shopify has `Personalization ID` and private fulfillment resolution works. No checkout image embedding is required.
+8. Activate the accepted brand to `live/live` while public payment can still remain OFF.
+9. Ask for separate explicit owner authorization before setting `public_payment_enabled=true` for customers.
 
 ## Definition of done
 
