@@ -23,12 +23,15 @@ type PolicyStatus = {
 
 type Readiness = {
   ready: boolean;
+  acceptanceReady: boolean;
   checks: Record<string, boolean>;
   policy: { approved: boolean; approvedAt: string | null; policyHash: string };
   acceptance: { attemptId: string; orderId: string; totalCents: number; acceptedAt: string } | null;
 };
 
 type BrandLaunch = { brand: Brand; policy: PolicyStatus; readiness: Readiness };
+
+type AcceptanceSession = { url: string; expiresAt: number };
 
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const response = await dashboardFetch(path, {
@@ -122,6 +125,17 @@ export function LaunchCenter() {
     finally { setBusy(""); }
   }
 
+  async function startAcceptance(item: BrandLaunch) {
+    setBusy(`start:${item.brand.id}`);
+    try {
+      const session = await api<AcceptanceSession>(`/api/brands/${item.brand.id}/acceptance-session`, "POST");
+      const url = new URL(session.url);
+      if (url.protocol !== "https:" || !url.hostname.startsWith("checkout.")) throw new Error("Controlled acceptance returned an invalid checkout link.");
+      window.location.assign(url.toString());
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not start controlled acceptance."); }
+    finally { setBusy(""); }
+  }
+
   async function recordAcceptance(item: BrandLaunch) {
     const attemptId = (attempt[item.brand.id] || "").trim();
     setBusy(`accept:${item.brand.id}`);
@@ -170,8 +184,11 @@ export function LaunchCenter() {
             const p = item.policy.policy;
             const supportBusy = busy === `support:${brand.id}`;
             const policyBusy = busy === `policy:${brand.id}`;
+            const startBusy = busy === `start:${brand.id}`;
             const acceptBusy = busy === `accept:${brand.id}`;
             const liveBusy = busy === `live:${brand.id}`;
+            const privateAcceptanceArmed = item.readiness.checks.paymentAcceptanceEnabled === true && item.readiness.checks.publicPaymentEnabled !== true;
+            const canStartAcceptance = item.readiness.acceptanceReady && privateAcceptanceArmed && !item.readiness.acceptance;
             return <section key={brand.id} style={{ border: `1px solid ${item.readiness.ready ? "rgba(88,225,164,.35)" : "#28314c"}`, background: "#0e1321", borderRadius: 28, overflow: "hidden" }}>
               <div style={{ padding: 24, display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap", borderBottom: "1px solid #232b43" }}>
                 <div style={{ display: "flex", gap: 14, alignItems: "center" }}><span style={{ width: 44, height: 44, display: "grid", placeItems: "center", borderRadius: 14, background: `${brand.accent}25`, color: brand.accent }}><Store size={20} /></span><div><strong style={{ fontSize: 22 }}>{brand.name}</strong><div style={{ color: "#8e98b8", fontSize: 13 }}>{brand.domain} · {brand.status}/{brand.mode}</div></div></div>
@@ -211,12 +228,18 @@ export function LaunchCenter() {
               <div style={{ padding: "0 24px 24px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 16 }}>
                 <div style={{ border: "1px solid #242d46", borderRadius: 20, padding: 20, background: "#0b101c" }}>
                   <div style={{ fontSize: 12, color: "#8d97b7", letterSpacing: ".11em", fontWeight: 900 }}>3 · CONTROLLED ACCEPTANCE</div>
-                  {item.readiness.acceptance ? <div style={{ marginTop: 10, color: "#72e2b0", fontSize: 13, lineHeight: 1.55 }}><strong>Current acceptance verified.</strong><br />{item.readiness.acceptance.attemptId}<br />{item.readiness.acceptance.orderId} · {money(item.readiness.acceptance.totalCents)}<br />{date(item.readiness.acceptance.acceptedAt)}</div> : <><p style={{ color: "#929cbb", fontSize: 13, lineHeight: 1.55 }}>After the explicitly authorized controlled real purchase completes and exactly one paid Shopify order exists, paste its immutable Limitless attempt ID here.</p><input value={attempt[brand.id] ?? ""} onChange={event => setAttempt(previous => ({ ...previous, [brand.id]: event.target.value }))} placeholder="attempt_…" style={{ width: "100%", boxSizing: "border-box", margin: "6px 0 10px", background: "#111827", border: "1px solid #303a57", color: "#fff", borderRadius: 12, padding: "12px 13px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /><button onClick={() => void recordAcceptance(item)} disabled={!attempt[brand.id]?.trim() || acceptBusy} style={{ border: 0, background: attempt[brand.id]?.trim() ? "#7158ff" : "#30364a", color: "#fff", borderRadius: 12, padding: "10px 14px", fontWeight: 850 }}>{acceptBusy ? "Verifying…" : "Record controlled acceptance"}</button></>}
+                  {item.readiness.acceptance ? <div style={{ marginTop: 10, color: "#72e2b0", fontSize: 13, lineHeight: 1.55 }}><strong>Current acceptance verified.</strong><br />{item.readiness.acceptance.attemptId}<br />{item.readiness.acceptance.orderId} · {money(item.readiness.acceptance.totalCents)}<br />{date(item.readiness.acceptance.acceptedAt)}</div> : <>
+                    <p style={{ color: "#929cbb", fontSize: 13, lineHeight: 1.55 }}>The private acceptance button only works after the acceptance gate is deliberately armed while public payments remain off. It creates a 20-minute browser-only session, then sends you to the storefront to purchase normally.</p>
+                    <button onClick={() => void startAcceptance(item)} disabled={!canStartAcceptance || startBusy} style={{ border: 0, background: canStartAcceptance ? "#7158ff" : "#30364a", color: "#fff", borderRadius: 12, padding: "10px 14px", fontWeight: 850, cursor: canStartAcceptance ? "pointer" : "not-allowed", marginBottom: 12 }}>{startBusy ? "Preparing private checkout…" : "Start private acceptance checkout"}</button>
+                    <p style={{ color: "#929cbb", fontSize: 13, lineHeight: 1.55 }}>After the explicitly authorized real purchase completes and exactly one paid Shopify order exists, enter the immutable Limitless attempt ID shown on the confirmation page.</p>
+                    <input value={attempt[brand.id] ?? ""} onChange={event => setAttempt(previous => ({ ...previous, [brand.id]: event.target.value }))} placeholder="attempt_…" style={{ width: "100%", boxSizing: "border-box", margin: "6px 0 10px", background: "#111827", border: "1px solid #303a57", color: "#fff", borderRadius: 12, padding: "12px 13px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} />
+                    <button onClick={() => void recordAcceptance(item)} disabled={!attempt[brand.id]?.trim() || acceptBusy} style={{ border: 0, background: attempt[brand.id]?.trim() ? "#7158ff" : "#30364a", color: "#fff", borderRadius: 12, padding: "10px 14px", fontWeight: 850 }}>{acceptBusy ? "Verifying…" : "Record controlled acceptance"}</button>
+                  </>}
                 </div>
                 <div style={{ border: `1px solid ${item.readiness.ready ? "rgba(88,225,164,.35)" : "#242d46"}`, borderRadius: 20, padding: 20, background: item.readiness.ready ? "rgba(88,225,164,.045)" : "#0b101c" }}>
                   <div style={{ fontSize: 12, color: "#8d97b7", letterSpacing: ".11em", fontWeight: 900 }}>4 · ACTIVATE</div>
                   <h3 style={{ margin: "8px 0 6px" }}>{item.readiness.ready ? "All launch gates are green." : "Still locked."}</h3>
-                  <p style={{ color: "#929cbb", fontSize: 13, lineHeight: 1.55 }}>{item.readiness.ready ? "Activating changes this brand to live/live. The checkout continues to verify current Shopify totals and payment state on every order." : "This button stays disabled until every check above is true. Upgrading Netlify or flipping one environment variable is not sufficient."}</p>
+                  <p style={{ color: "#929cbb", fontSize: 13, lineHeight: 1.55 }}>{item.readiness.ready ? "Activating changes this brand to live/live. The checkout continues to verify current Shopify totals and payment state on every order." : "This button stays disabled until every check above is true. Public payments cannot be enabled by this screen alone."}</p>
                   <button onClick={() => void activate(item)} disabled={!item.readiness.ready || liveBusy} style={{ border: 0, background: item.readiness.ready ? "#36b982" : "#30364a", color: "#fff", borderRadius: 12, padding: "11px 15px", fontWeight: 900, cursor: item.readiness.ready ? "pointer" : "not-allowed" }}>{liveBusy ? "Activating…" : "Enable live checkout"}</button>
                 </div>
               </div>
