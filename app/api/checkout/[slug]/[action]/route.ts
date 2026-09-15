@@ -7,13 +7,14 @@ const ACTIONS = new Set(["quote", "payment-start", "status"]);
 
 type RouteContext = { params: Promise<{ slug: string; action: string }> };
 
-function response(body: string, status: number) {
+function response(body: string, status: number, headers: Record<string, string> = {}) {
   return new Response(body, {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
+      ...headers,
     },
   });
 }
@@ -35,6 +36,17 @@ function sanitizeQuote(body: string) {
     return JSON.stringify(value);
   } catch {
     return body;
+  }
+}
+
+function acceptanceAttemptCookie(body: string, slug: string) {
+  try {
+    const value = JSON.parse(body) as Record<string, unknown>;
+    const attemptId = typeof value.attemptId === "string" ? value.attemptId : "";
+    if (value.acceptanceMode !== true || !/^attempt_[0-9a-f-]{36}$/.test(attemptId)) return "";
+    return `limitless_acceptance_attempt_${slug}=${attemptId}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`;
+  } catch {
+    return "";
   }
 }
 
@@ -86,7 +98,12 @@ async function forward(request: Request, context: RouteContext) {
   }
 
   const body = await upstream.text();
-  return response(action === "quote" && upstream.ok ? sanitizeQuote(body) : body, upstream.status);
+  const headers: Record<string, string> = {};
+  if (action === "payment-start" && privateAcceptance && upstream.ok) {
+    const cookie = acceptanceAttemptCookie(body, slug);
+    if (cookie) headers["Set-Cookie"] = cookie;
+  }
+  return response(action === "quote" && upstream.ok ? sanitizeQuote(body) : body, upstream.status, headers);
 }
 
 export async function GET(request: Request, context: RouteContext) { return forward(request, context); }
