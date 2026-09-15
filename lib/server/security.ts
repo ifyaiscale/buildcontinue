@@ -8,13 +8,23 @@ const COOKIE = "limitless_session";
 const SESSION_SECONDS = 60 * 60 * 8;
 const HASH_PATTERN = /^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/;
 
+function adminPassword() {
+  return process.env.LIMITLESS_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "";
+}
+function adminPasswordHash() {
+  return process.env.LIMITLESS_ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH || "";
+}
+function sessionSecret() {
+  return process.env.LIMITLESS_SESSION_SECRET || process.env.SESSION_SECRET || "";
+}
+
 export function authConfigured() {
-  const password = process.env.ADMIN_PASSWORD || "";
-  const hash = process.env.ADMIN_PASSWORD_HASH || "";
-  return (hash ? HASH_PATTERN.test(hash) : password.length >= 16) && (process.env.SESSION_SECRET || "").length >= 32;
+  const password = adminPassword();
+  const hash = adminPasswordHash();
+  return (hash ? HASH_PATTERN.test(hash) : password.length >= 16) && sessionSecret().length >= 32;
 }
 export function demoMode() {
-  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !process.env.ADMIN_PASSWORD && !process.env.ADMIN_PASSWORD_HASH && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
+  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !adminPassword() && !adminPasswordHash() && !sessionSecret() && !process.env.CREDENTIAL_ENCRYPTION_KEY;
 }
 export function encryptionConfigured() { return /^[a-fA-F0-9]{64}$/.test(process.env.CREDENTIAL_ENCRYPTION_KEY || ""); }
 
@@ -24,16 +34,16 @@ function safeEqual(a: string, b: string) {
 }
 export function verifyPassword(password: string) {
   if (!authConfigured() || password.length > 1024) return false;
-  const hash = process.env.ADMIN_PASSWORD_HASH || "";
+  const hash = adminPasswordHash();
   if (hash) {
     if (!HASH_PATTERN.test(hash)) return false;
     const [, salt, expected] = hash.split(":");
     return safeEqual(scryptSync(password, salt, 64).toString("hex"), expected);
   }
   const salt = "limitless-admin-password-compare";
-  return timingSafeEqual(scryptSync(password, salt, 64), scryptSync(process.env.ADMIN_PASSWORD || "", salt, 64));
+  return timingSafeEqual(scryptSync(password, salt, 64), scryptSync(adminPassword(), salt, 64));
 }
-function signature(value: string) { return createHmac("sha256", process.env.SESSION_SECRET || "").update(value).digest("base64url"); }
+function signature(value: string) { return createHmac("sha256", sessionSecret()).update(value).digest("base64url"); }
 export function sessionCookie(logout = false, now = Date.now()) {
   if (!logout && !authConfigured()) throw new HttpError(503, "Administrator authentication is not configured.");
   const payload = `${Math.floor(now / 1000) + SESSION_SECONDS}.${randomBytes(24).toString("base64url")}`;
@@ -52,7 +62,7 @@ export function authenticated(request: Request, now = Date.now()) {
 }
 export function requireAdmin(request: Request) {
   if (demoMode()) return;
-  if (!authConfigured()) throw new HttpError(503, "Administrator access is not configured. Set ADMIN_PASSWORD (16+ characters) or ADMIN_PASSWORD_HASH, and SESSION_SECRET (32+ characters).");
+  if (!authConfigured()) throw new HttpError(503, "Administrator access is not configured. Configure the Limitless admin password hash and session secret.");
   if (!authenticated(request)) throw new HttpError(401, "Sign in to manage your workspace.");
 }
 export function requireCredentials(request: Request) {
