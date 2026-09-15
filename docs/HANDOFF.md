@@ -6,15 +6,16 @@ Last updated: 2026-09-14.
 
 Production branch: `hoplite/beroia-65b17429`.
 
-Netlify project: `limitlesscheckout`. Production auto-deploy is active from the production branch. Commit `3330e060fc208b4832858ddd7a322e770194471b` built and published successfully; the subsequent FaceJamas controlled-acceptance UI patch `e5064c5299c49fb58cda2d6b99ef846d741fc7d5` is expected to auto-deploy next and must be confirmed `ready` before calling that patch live.
+Netlify project: `limitlesscheckout`. Production auto-deploy is active from the production branch. Commit `3330e060fc208b4832858ddd7a322e770194471b` built and published successfully; the subsequent FaceJamas controlled-acceptance UI patch `e5064c5299c49fb58cda2d6b99ef846d741fc7d5` was confirmed ready in production.
 
 Controlled payment acceptance is enabled with `PAYMENT_ACCEPTANCE_ENABLED=true`. **Public customer charging remains OFF** with `PUBLIC_PAYMENT_ENABLED=false`. Do not enable public payment until the per-brand signed webhook, policy approval and controlled real-purchase acceptance gates are complete.
 
 Production environment hardening completed on 2026-09-14:
 
-- Replaced the plaintext administrator password variable with a one-way `ADMIN_PASSWORD_HASH`; the user's password itself did not change.
-- Rotated `SESSION_SECRET`, intentionally invalidating old administrator sessions.
-- Re-stored `CREDENTIAL_ENCRYPTION_KEY` and `DATABASE_URL` as secret environment variables without changing their values, preserving existing encrypted provider connections.
+- Administrator authentication uses a one-way `ADMIN_PASSWORD_HASH`; no plaintext admin password is stored in Netlify.
+- `SESSION_SECRET` was rotated, intentionally invalidating old administrator sessions.
+- After `/launch-center/webhooks` reported administrator access unconfigured, the hidden session secret and admin password hash were replaced with known-valid values and this commit was created specifically to force a fresh production deploy with the repaired runtime environment.
+- `CREDENTIAL_ENCRYPTION_KEY` and `DATABASE_URL` remain secret environment variables; Shopify/Whop provider credentials and database records were not modified during auth recovery.
 - Configured FaceJamas `SUPABASE_PUBLIC_ANON_KEY` and `FACEJAMAS_ASSET_URL` for private fulfillment media access.
 
 ## Completed application work
@@ -84,8 +85,8 @@ The webhook provisioning endpoint derives the full HTTPS callback from `APP_URL`
 
 ## Remaining launch actions — ordered
 
-1. Confirm Netlify production reports commit `e5064c5299c49fb58cda2d6b99ef846d741fc7d5` or later as `ready`.
-2. Sign in again if required after the session-secret rotation, open `/launch-center/webhooks`, and choose **Provision all three**. Resolve any brand-specific Whop key permission error before continuing.
+1. Confirm the auth-recovery commit or a later production commit reports `ready` in Netlify.
+2. Sign in with the current administrator credential, open `/launch-center/webhooks`, and choose **Provision all three**. Resolve any brand-specific Whop key permission error before continuing.
 3. Return to Launch Center and confirm all three support inboxes are monitored.
 4. Owner reviews and explicitly approves each brand's current shipping/returns/privacy/product-specific policy. Do not auto-approve these commitments.
 5. For each brand, use its admin **Check checkout total** panel with a representative launch address and available product; verify the Shopify-authoritative USD total.
