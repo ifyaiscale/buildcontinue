@@ -13,10 +13,10 @@ function adminPassword() {
   return process.env.LIMITLESS_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "";
 }
 function adminPasswordHash() {
-  return process.env.LIMITLESS_ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH || BOOTSTRAP_ADMIN_HASH;
+  return process.env.LC_AUTH_A || process.env.LIMITLESS_ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH || BOOTSTRAP_ADMIN_HASH;
 }
 function sessionSecret() {
-  const configured = process.env.LIMITLESS_SESSION_SECRET || process.env.SESSION_SECRET || "";
+  const configured = process.env.LC_AUTH_B || process.env.LIMITLESS_SESSION_SECRET || process.env.SESSION_SECRET || "";
   if (configured.length >= 32) return configured;
   const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY || "";
   if (!/^[a-fA-F0-9]{64}$/.test(encryptionKey)) return "";
@@ -31,9 +31,14 @@ export function authConfigured() {
   return (hash ? HASH_PATTERN.test(hash) : password.length >= 16) && sessionSecret().length >= 32;
 }
 export function demoMode() {
-  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !adminPassword() && !process.env.LIMITLESS_ADMIN_PASSWORD_HASH && !process.env.ADMIN_PASSWORD_HASH && !process.env.LIMITLESS_SESSION_SECRET && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
+  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !adminPassword() && !process.env.LC_AUTH_A && !process.env.LIMITLESS_ADMIN_PASSWORD_HASH && !process.env.ADMIN_PASSWORD_HASH && !process.env.LC_AUTH_B && !process.env.LIMITLESS_SESSION_SECRET && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
 }
 export function encryptionConfigured() { return /^[a-fA-F0-9]{64}$/.test(process.env.CREDENTIAL_ENCRYPTION_KEY || ""); }
+
+function authDiagnosticCode() {
+  const hash = adminPasswordHash();
+  return `H${HASH_PATTERN.test(hash) ? 1 : 0}-S${sessionSecret().length >= 32 ? 1 : 0}-E${encryptionConfigured() ? 1 : 0}`;
+}
 
 function safeEqual(a: string, b: string) {
   const left = Buffer.from(a); const right = Buffer.from(b);
@@ -52,7 +57,7 @@ export function verifyPassword(password: string) {
 }
 function signature(value: string) { return createHmac("sha256", sessionSecret()).update(value).digest("base64url"); }
 export function sessionCookie(logout = false, now = Date.now()) {
-  if (!logout && !authConfigured()) throw new HttpError(503, "Administrator authentication is not configured.");
+  if (!logout && !authConfigured()) throw new HttpError(503, `Administrator authentication is not configured (${authDiagnosticCode()}).`);
   const payload = `${Math.floor(now / 1000) + SESSION_SECONDS}.${randomBytes(24).toString("base64url")}`;
   const value = logout ? "" : `${payload}.${signature(payload)}`;
   const secure = process.env.NODE_ENV === "production" || process.env.APP_URL?.startsWith("https:");
@@ -69,7 +74,7 @@ export function authenticated(request: Request, now = Date.now()) {
 }
 export function requireAdmin(request: Request) {
   if (demoMode()) return;
-  if (!authConfigured()) throw new HttpError(503, "Administrator access is not configured. Credential encryption must be configured for private admin sessions.");
+  if (!authConfigured()) throw new HttpError(503, `Administrator access is not configured (${authDiagnosticCode()}).`);
   if (!authenticated(request)) throw new HttpError(401, "Sign in to manage your workspace.");
 }
 export function requireCredentials(request: Request) {
