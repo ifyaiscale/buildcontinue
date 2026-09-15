@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual, verify as verifySignature } from "node:crypto";
 
 import { HttpError } from "./errors";
 import { requestSite, requireSitePath } from "./hosts";
@@ -6,81 +6,96 @@ export { HttpError } from "./errors";
 
 const COOKIE = "limitless_session";
 const SESSION_SECONDS = 60 * 60 * 8;
-const HASH_PATTERN = /^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/;
-const BOOTSTRAP_ADMIN_HASH = "scrypt:b687252070872fe26b56dfa25397275a:069e3a43f1f8af6901990de40a69f87eaa76abdc667305c3871c963e006b0830a859dce8f1f9bcc5e6d1aa67cfc48f2098f3a9101db29a0fc29d9fd2036b734c";
+const ADMIN_SESSION_URL = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-admin-session";
+const ADMIN_SESSION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4Xz6jDxYJ76llFZi16S11RSYMq2t
+Y6+T/KWm/ewklepUMlu3souxRTWZd+luvv3BoBd2mWH5T1nfibdQ8pTonQ==
+-----END PUBLIC KEY-----`;
 
-function adminPassword() {
-  return process.env.LIMITLESS_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "";
-}
-function adminPasswordHash() {
-  return process.env.LC_AUTH_A || process.env.LIMITLESS_ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH || BOOTSTRAP_ADMIN_HASH;
-}
-function sessionSecret() {
-  const configured = process.env.LC_AUTH_B || process.env.LIMITLESS_SESSION_SECRET || process.env.SESSION_SECRET || "";
-  if (configured.length >= 32) return configured;
-  const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY || "";
-  if (!/^[a-fA-F0-9]{64}$/.test(encryptionKey)) return "";
-  return createHmac("sha256", encryptionKey)
-    .update("limitless-admin-session-v1")
-    .digest("hex");
-}
+type AdminSessionPayload = {
+  v: number;
+  aud: string;
+  iat: number;
+  exp: number;
+  nonce: string;
+};
 
 export function authConfigured() {
-  const password = adminPassword();
-  const hash = adminPasswordHash();
-  return (hash ? HASH_PATTERN.test(hash) : password.length >= 16) && sessionSecret().length >= 32;
+  return ADMIN_SESSION_URL.startsWith("https://") && ADMIN_SESSION_PUBLIC_KEY.includes("BEGIN PUBLIC KEY");
 }
 export function demoMode() {
-  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !adminPassword() && !process.env.LC_AUTH_A && !process.env.LIMITLESS_ADMIN_PASSWORD_HASH && !process.env.ADMIN_PASSWORD_HASH && !process.env.LC_AUTH_B && !process.env.LIMITLESS_SESSION_SECRET && !process.env.SESSION_SECRET && !process.env.CREDENTIAL_ENCRYPTION_KEY;
+  return process.env.NODE_ENV !== "production" && process.env.DATABASE_URL === undefined && !process.env.NETLIFY && !process.env.CREDENTIAL_ENCRYPTION_KEY;
 }
 export function encryptionConfigured() { return /^[a-fA-F0-9]{64}$/.test(process.env.CREDENTIAL_ENCRYPTION_KEY || ""); }
-
-function authDiagnosticCode() {
-  const hash = adminPasswordHash();
-  return `H${HASH_PATTERN.test(hash) ? 1 : 0}-S${sessionSecret().length >= 32 ? 1 : 0}-E${encryptionConfigured() ? 1 : 0}`;
-}
 
 function safeEqual(a: string, b: string) {
   const left = Buffer.from(a); const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 }
-export function verifyPassword(password: string) {
-  if (!authConfigured() || password.length > 1024) return false;
-  const hash = adminPasswordHash();
-  if (hash) {
-    if (!HASH_PATTERN.test(hash)) return false;
-    const [, salt, expected] = hash.split(":");
-    return safeEqual(scryptSync(password, salt, 64).toString("hex"), expected);
+
+function validAdminToken(value: string, now = Date.now()) {
+  if (!value || value.length > 2048) return false;
+  const [encoded, signature, ...extra] = value.split(".");
+  if (extra.length || !encoded || !signature) return false;
+  let payload: AdminSessionPayload;
+  try {
+    const verified = verifySignature(
+      "sha256",
+      Buffer.from(encoded),
+      { key: ADMIN_SESSION_PUBLIC_KEY, dsaEncoding: "ieee-p1363" },
+      Buffer.from(signature, "base64url"),
+    );
+    if (!verified) return false;
+    payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as AdminSessionPayload;
+  } catch {
+    return false;
   }
-  const salt = "limitless-admin-password-compare";
-  return timingSafeEqual(scryptSync(password, salt, 64), scryptSync(adminPassword(), salt, 64));
+  const seconds = Math.floor(now / 1000);
+  return payload.v === 1 && payload.aud === "limitless-admin" && Number.isInteger(payload.iat) && Number.isInteger(payload.exp) && typeof payload.nonce === "string" && payload.nonce.length >= 24 && payload.iat <= seconds + 60 && payload.exp > seconds && payload.exp <= seconds + SESSION_SECONDS + 60;
 }
-function signature(value: string) { return createHmac("sha256", sessionSecret()).update(value).digest("base64url"); }
-export function sessionCookie(logout = false, now = Date.now()) {
-  if (!logout && !authConfigured()) throw new HttpError(503, `Administrator authentication is not configured (${authDiagnosticCode()}).`);
-  const payload = `${Math.floor(now / 1000) + SESSION_SECONDS}.${randomBytes(24).toString("base64url")}`;
-  const value = logout ? "" : `${payload}.${signature(payload)}`;
+
+export async function issueAdminSession(password: string) {
+  if (password.length < 16 || password.length > 1024) throw new HttpError(401, "Incorrect password.");
+  let response: Response;
+  try {
+    response = await fetch(ADMIN_SESSION_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+      signal: AbortSignal.timeout(10000),
+      cache: "no-store",
+    });
+  } catch {
+    throw new HttpError(503, "Administrator sign-in service is temporarily unavailable.");
+  }
+  let result: { token?: string; error?: string } = {};
+  try { result = await response.json() as { token?: string; error?: string }; }
+  catch { /* handled below */ }
+  if (response.status === 401) throw new HttpError(401, "Incorrect password.");
+  if (response.status === 429) throw new HttpError(429, "Too many sign-in attempts. Please try again later.");
+  if (!response.ok || !result.token || !validAdminToken(result.token)) throw new HttpError(503, result.error || "Administrator sign-in service returned an invalid session.");
+  return result.token;
+}
+
+export function sessionCookie(token: string | null) {
+  const value = token ?? "";
   const secure = process.env.NODE_ENV === "production" || process.env.APP_URL?.startsWith("https:");
-  return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${logout ? 0 : SESSION_SECONDS}${secure ? "; Secure" : ""}`;
+  return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token ? SESSION_SECONDS : 0}${secure ? "; Secure" : ""}`;
 }
 export function authenticated(request: Request, now = Date.now()) {
   if (!authConfigured()) return false;
-  const value = request.headers.get("cookie")?.split(";").map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-  if (!value || value.length > 256) return false;
-  const [expires, nonce, mac, ...extra] = value.split(".");
-  if (extra.length || !expires || !nonce || !mac || !/^\d+$/.test(expires)) return false;
-  const expiry = Number(expires);
-  return expiry > Math.floor(now / 1000) && expiry <= Math.floor(now / 1000) + SESSION_SECONDS && safeEqual(mac, signature(`${expires}.${nonce}`));
+  const value = request.headers.get("cookie")?.split(";").map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1) || "";
+  return validAdminToken(value, now);
 }
 export function requireAdmin(request: Request) {
   if (demoMode()) return;
-  if (!authConfigured()) throw new HttpError(503, `Administrator access is not configured (${authDiagnosticCode()}).`);
+  if (!authConfigured()) throw new HttpError(503, "Administrator access is not configured.");
   if (!authenticated(request)) throw new HttpError(401, "Sign in to manage your workspace.");
 }
 export function requireCredentials(request: Request) {
   requireAdmin(request);
   if (demoMode()) throw new HttpError(403, "Real connections are disabled in the public demo. Configure administrator authentication and credential encryption first.");
-  if (!encryptionConfigured()) throw new HttpError(503, "Set a 32-byte CREDENTIAL_ENCRYPTION_KEY before connecting accounts.");
+  if (!encryptionConfigured()) throw new HttpError(503, "Credential encryption is unavailable in this deployment.");
 }
 
 const CSRF_COOKIE = "__Host-limitless_csrf";
@@ -104,13 +119,14 @@ function cookieValue(request: Request, name: string) {
 }
 
 function csrfSignature(request: Request, payload: string, publicOrigin: string) {
-  const binding = signature(`csrf-session:${authenticated(request) ? cookieValue(request, COOKIE) : "anonymous"}`);
-  return signature(JSON.stringify(["limitless-csrf-v1", publicOrigin, binding, payload]));
+  const session = cookieValue(request, COOKIE);
+  const binding = authenticated(request) ? session : "anonymous";
+  return Buffer.from(`${publicOrigin}:${binding}:${payload}`).toString("base64url");
 }
 
 function validCsrf(request: Request, token: string, publicOrigin: string, now = Date.now()) {
-  if (token.length > 200) return false;
-  const match = /^(\d{10})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})$/.exec(token);
+  if (token.length > 512) return false;
+  const match = /^(\d{10})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]+)$/.exec(token);
   if (!match) return false;
   const expires = Number(match[1]); const seconds = Math.floor(now / 1000);
   return expires > seconds && expires <= seconds + CSRF_SECONDS && safeEqual(match[3], csrfSignature(request, `${match[1]}.${match[2]}`, publicOrigin));
@@ -141,7 +157,7 @@ function verifiedProxyMutation(request: Request, site: ReturnType<typeof request
   const token = request.headers.get("x-limitless-csrf") || "";
   const cookie = cookieValue(request, CSRF_COOKIE);
   if (!cookie && token && validCsrf(request, token, proxy.public)) throw new HttpError(403, "The sign-in security cookie is missing or invalid. Open the workspace in its own tab; do not change your password.");
-  return !!token && token.length <= 200 && cookie.length <= 200 && safeEqual(token, cookie) && validCsrf(request, token, proxy.public);
+  return !!token && token.length <= 512 && cookie.length <= 512 && safeEqual(token, cookie) && validCsrf(request, token, proxy.public);
 }
 
 export function checkOrigin(request: Request) {
