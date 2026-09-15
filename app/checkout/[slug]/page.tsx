@@ -1,18 +1,33 @@
 import type { Metadata } from "next";
-import { CheckoutPage } from "@/components/checkout";
-import { CartCheckoutError, CartCheckoutPage } from "@/components/cart-checkout";
+import { CartCheckoutError, CartCheckoutPage, type HandoffCartItem } from "@/components/cart-checkout";
 import { PaymentReturnPage } from "@/components/payment-return";
-import { publicCartBrand, readCartSession } from "@/lib/server/cart-session";
 import { pageSite } from "@/lib/server/page-site";
-import { store } from "@/lib/server/store";
+import type { Brand } from "@/lib/types";
 import "../../checkout.css";
 import "../white-label.css";
 
+const CHECKOUT_RUNTIME = "https://ifwljlzrhfmviwhsjhpp.supabase.co/functions/v1/limitless-checkout-runtime";
 const checkoutTitles: Record<string, string> = {
   chefings: "CHEFINGS · Secure checkout",
   cozyinfants: "Cozy Infants · Secure checkout",
   facejamas: "FaceJamas · Secure checkout",
 };
+
+type CheckoutView = { brand: Brand; items?: HandoffCartItem[]; expiresAt?: number };
+
+async function checkoutView(slug: string, cartToken?: string): Promise<CheckoutView> {
+  const response = await fetch(CHECKOUT_RUNTIME, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "view", slug, ...(cartToken ? { cartToken } : {}) }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error("Checkout state unavailable");
+  const result = await response.json() as CheckoutView;
+  if (!result?.brand || result.brand.slug !== slug) throw new Error("Checkout state invalid");
+  return result;
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -28,27 +43,36 @@ export default async function PublicCheckoutPage({ params, searchParams }: { par
   await pageSite(`/checkout/${slug}`);
   const query = await searchParams;
   const receipt = typeof query.receipt === "string" ? query.receipt : "";
+
   if (receipt) {
     try {
-      const db = await store();
-      const brand = await db.brand(slug, true);
-      return <PaymentReturnPage brand={publicCartBrand(brand)} receipt={receipt} />;
+      const { brand } = await checkoutView(slug);
+      return <PaymentReturnPage brand={brand} receipt={receipt} />;
     } catch {
       return <CartCheckoutError />;
     }
   }
 
   const token = typeof query.cart === "string" ? query.cart : "";
-  if (!token) return <CheckoutPage slug={slug} />;
+  if (!token) {
+    try {
+      const { brand } = await checkoutView(slug);
+      return <CartCheckoutError domain={brand.domain} />;
+    } catch {
+      return <CartCheckoutError />;
+    }
+  }
 
-  let domain = "";
   try {
-    const db = await store();
-    const brand = await db.brand(slug, true);
-    domain = brand.domain;
-    const session = readCartSession(brand, token);
-    return <CartCheckoutPage brand={publicCartBrand(brand)} initialItems={session.items} cartToken={token} />;
+    const view = await checkoutView(slug, token);
+    if (!Array.isArray(view.items) || view.items.length === 0) throw new Error("Checkout cart unavailable");
+    return <CartCheckoutPage brand={view.brand} initialItems={view.items} cartToken={token} />;
   } catch {
-    return <CartCheckoutError domain={domain} />;
+    try {
+      const { brand } = await checkoutView(slug);
+      return <CartCheckoutError domain={brand.domain} />;
+    } catch {
+      return <CartCheckoutError />;
+    }
   }
 }
